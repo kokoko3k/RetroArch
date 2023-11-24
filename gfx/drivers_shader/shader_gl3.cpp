@@ -79,7 +79,7 @@ static void gl3_framebuffer_copy(
    glUseProgram(quad_program);
    if (flat_ubo_vertex >= 0)
    {
-      static float mvp[16] = {
+      static float mvp[16] = { 
                                 2.0f, 0.0f, 0.0f, 0.0f,
                                 0.0f, 2.0f, 0.0f, 0.0f,
                                 0.0f, 0.0f, 2.0f, 0.0f,
@@ -111,7 +111,7 @@ static void gl3_framebuffer_copy(
 
 static void gl3_framebuffer_copy_partial(
       GLuint fb_id,
-      GLuint quad_program,
+      GLuint quad_program, 
       GLint flat_ubo_vertex,
       struct Size2D size,
       GLuint image,
@@ -138,7 +138,7 @@ static void gl3_framebuffer_copy_partial(
    glUseProgram(quad_program);
    if (flat_ubo_vertex >= 0)
    {
-      static float mvp[16] = {
+      static float mvp[16] = { 
                                 2.0f, 0.0f, 0.0f, 0.0f,
                                 0.0f, 2.0f, 0.0f, 0.0f,
                                 0.0f, 0.0f, 2.0f, 0.0f,
@@ -213,7 +213,7 @@ static uint32_t gl3_get_cross_compiler_target_version(void)
 #ifdef HAVE_OPENGLES3
    if (!version || sscanf(version, "OpenGL ES %u.%u", &major, &minor) != 2)
       return 300;
-
+   
    if (major == 2 && minor == 0)
       return 100;
 #else
@@ -1336,7 +1336,7 @@ void Pass::build_semantic_vec4(uint8_t *data, slang_semantic semantic,
 
    if (refl->push_constant)
    {
-      if (  refl->location.push_vertex   >= 0 ||
+      if (  refl->location.push_vertex   >= 0 || 
             refl->location.push_fragment >= 0)
       {
          float v4[4];
@@ -1644,8 +1644,8 @@ void Pass::build_semantics(uint8_t *buffer,
                        unsigned(current_viewport.height));
 
    build_semantic_uint(buffer, SLANG_SEMANTIC_FRAME_COUNT,
-                       frame_count_period
-                       ? uint32_t(frame_count % frame_count_period)
+                       frame_count_period 
+                       ? uint32_t(frame_count % frame_count_period) 
                        : uint32_t(frame_count));
 
    build_semantic_int(buffer, SLANG_SEMANTIC_FRAME_DIRECTION,
@@ -1736,7 +1736,7 @@ void Pass::build_commands(
                    GLsizei((reflection.push_constant_size + 15) / 16),
                    reinterpret_cast<const float *>(push_constant_buffer.data()));
 
-   if (!(      locations.buffer_index_ubo_vertex   == GL_INVALID_INDEX
+   if (!(      locations.buffer_index_ubo_vertex   == GL_INVALID_INDEX 
             && locations.buffer_index_ubo_fragment == GL_INVALID_INDEX))
    {
       /* UBO Ring - update and bind */
@@ -1925,7 +1925,7 @@ void gl3_filter_chain::build_offscreen_passes(const gl3_viewport &vp)
 {
    unsigned i;
 
-   /* First frame, make sure our history and feedback textures
+   /* First frame, make sure our history and feedback textures 
     * are in a clean state. */
    if (require_clear)
    {
@@ -1977,7 +1977,7 @@ void gl3_filter_chain::end_frame()
 
       if (input_texture.width      != tmp->get_size().width  ||
             input_texture.height     != tmp->get_size().height ||
-            (input_texture.format    != 0
+            (input_texture.format    != 0 
              && input_texture.format != tmp->get_format()))
          tmp->set_size({ input_texture.width, input_texture.height }, input_texture.format);
 
@@ -2000,7 +2000,7 @@ void gl3_filter_chain::build_viewport_pass(
       const gl3_viewport &vp, const float *mvp)
 {
    unsigned i;
-   /* First frame, make sure our history and
+   /* First frame, make sure our history and 
     * feedback textures are in a clean state. */
    if (require_clear)
    {
@@ -2132,7 +2132,7 @@ bool gl3_filter_chain::init_feedback()
 bool gl3_filter_chain::init_alias()
 {
    int i;
-
+    
    common.texture_semantic_map.clear();
    common.texture_semantic_uniform_map.clear();
 
@@ -2299,9 +2299,9 @@ void gl3_filter_chain::set_input_texture(
                common.quad_loc.flat_ubo_vertex,
                copy_framebuffer->get_size(),
                input_texture.image,
-               float(input_texture.width)
+               float(input_texture.width) 
                / input_texture.padded_width,
-               float(input_texture.height)
+               float(input_texture.height) 
                / input_texture.padded_height);
       input_texture.image = copy_framebuffer->get_image();
    }
@@ -2458,7 +2458,7 @@ gl3_filter_chain_t *gl3_filter_chain_create_from_preset(
    if (!chain)
       return nullptr;
 
-   if (      shader->luts
+   if (      shader->luts 
          && !gl3_filter_chain_load_luts(chain.get(), shader.get()))
       return nullptr;
 
@@ -2557,8 +2557,8 @@ gl3_filter_chain_t *gl3_filter_chain_create_from_preset(
       else
       {
          pass_info.source_filter =
-            pass->filter == RARCH_FILTER_LINEAR
-            ? GLSLANG_FILTER_CHAIN_LINEAR
+            pass->filter == RARCH_FILTER_LINEAR 
+            ? GLSLANG_FILTER_CHAIN_LINEAR 
             : GLSLANG_FILTER_CHAIN_NEAREST;
       }
       pass_info.address       = rarch_wrap_to_address(pass->wrap);
@@ -2572,7 +2572,7 @@ gl3_filter_chain_t *gl3_filter_chain_create_from_preset(
          pass_info.max_levels = ~0u;
 
       pass_info.mip_filter    = pass->filter != RARCH_FILTER_NEAREST && pass_info.max_levels > 1
-         ? GLSLANG_FILTER_CHAIN_LINEAR
+         ? GLSLANG_FILTER_CHAIN_LINEAR 
          : GLSLANG_FILTER_CHAIN_NEAREST;
 
       bool explicit_format = output.meta.rt_format != SLANG_FORMAT_UNKNOWN;
@@ -2641,11 +2641,6 @@ gl3_filter_chain_t *gl3_filter_chain_create_from_preset(
                pass_info.scale_x      = pass->fbo.scale_x;
                pass_info.scale_type_x = GLSLANG_FILTER_CHAIN_SCALE_VIEWPORT;
                break;
-
-            case RARCH_SCALE_ORIGINAL:
-               pass_info.scale_x      = pass->fbo.scale_x;
-               pass_info.scale_type_x = GLSLANG_FILTER_CHAIN_SCALE_ORIGINAL;
-               break;
          }
 
          switch (pass->fbo.type_y)
@@ -2664,12 +2659,6 @@ gl3_filter_chain_t *gl3_filter_chain_create_from_preset(
                pass_info.scale_y      = pass->fbo.scale_y;
                pass_info.scale_type_y = GLSLANG_FILTER_CHAIN_SCALE_VIEWPORT;
                break;
-
-            case RARCH_SCALE_ORIGINAL:
-               pass_info.scale_y      = pass->fbo.scale_x;
-               pass_info.scale_type_y = GLSLANG_FILTER_CHAIN_SCALE_ORIGINAL;
-               break;
-
          }
       }
 
