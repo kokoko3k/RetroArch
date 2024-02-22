@@ -195,23 +195,27 @@ MSG_HASH(
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_RESTART_RETROARCH,
-   "RetroArch 다시 시작"
+   "다시 시작"
    )
 MSG_HASH(
    MENU_ENUM_SUBLABEL_RESTART_RETROARCH,
-   "프로그램을 재시작합니다."
+   "RetroArch 응용 프로그램을 다시 시작하세요."
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_QUIT_RETROARCH,
-   "RetroArch 종료"
+   "나가기"
    )
 MSG_HASH(
    MENU_ENUM_SUBLABEL_QUIT_RETROARCH,
-   "프로그램을 종료합니다."
+   "RetroArch 응용 프로그램을 종료합니다. 종료 시 구성 저장이 활성화됩니다."
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_QUIT_RETROARCH_NOSAVE,
+   "RetroArch 응용 프로그램을 종료합니다. 종료 시 구성 저장이 비활성화됩니다."
    )
 MSG_HASH(
    MENU_ENUM_LABEL_HELP_QUIT_RETROARCH,
-   "RetroArch를 종료합니다. 프로그램을 강제 종료(SIGKILL 등)할 경우 RetroArch의 구성 등이 저장되지 않고 종료됩니다. 유닉스 계열 운영체제의 경우, SIGINT/SIGTERM을 사용하면 정상 종료가 가능합니다."
+   "RetroArch를 종료합니다. 어떤 어려운 방법(SIGKILL 등) 으로 프로그램을 종료하면 어떤 경우에도 구성을 저장하지 않고 RetroArch가 종료됩니다. Unix와 유사한 경우 SIGINT/SIGTERM을 사용하면 구성 저장을 포함하는 깔끔한 초기화 해제가 가능합니다."
    )
 
 /* Main Menu > Load Core */
@@ -1498,7 +1502,7 @@ MSG_HASH(
    )
 MSG_HASH(
    MENU_ENUM_LABEL_HELP_INPUT_DRIVER_UDEV,
-   "udev 입력 드라이버는 조이스틱 지원에 최신 evdev 조이패드 API를 활용합니다. 핫플러깅과 포스 피드백을 지원합니다.\n키보드 지원에는 evdev 이벤트가 사용됩니다. 키보드 콜백, 마우스, 터치패드를 지원합니다.\n대부분의 디스트로에서 기본적으로, /dev/input 노드는 루트 전용(모드 600)으로 구성되어 있습니다. udev 규칙을 설정하면 이 값들에 비 root 앱들이 접근할 수 있게 할 수 있[...]"
+   "udev 드라이버는 키보드 지원을 위해 evdev 이벤트를 읽습니다. 또한 키보드 콜백, 마우스, 터치패드도 지원합니다.\n기본적으로 대부분의 배포판에서, /dev/input 노드는 루트 전용입니다(모드 600). 루트가 아닌 사용자도 접속할 수 있도록 udev 규칙을 설정할 수 있습니다."
    )
 MSG_HASH(
    MENU_ENUM_LABEL_HELP_INPUT_DRIVER_LINUXRAW,
@@ -1516,6 +1520,35 @@ MSG_HASH(
    MENU_ENUM_SUBLABEL_JOYPAD_DRIVER,
    "사용할 컨트롤러 드라이버입니다."
    )
+MSG_HASH(
+   MENU_ENUM_LABEL_HELP_JOYPAD_DRIVER_DINPUT,
+   "DirectInput 컨트롤러 드라이버입니다."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_HELP_JOYPAD_DRIVER_HID,
+   "낮은 수준 휴먼 인터페이스 장치 드라이버입니다."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_HELP_JOYPAD_DRIVER_LINUXRAW,
+   "원시 Linux 드라이버는 레거시 조이스틱 API를 사용합니다. 가능하면 udev를 대신 사용하세요."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_HELP_JOYPAD_DRIVER_PARPORT,
+   "특수 어댑터를 통해 병렬 포트에 연결된 컨트롤러용 Linux 드라이버입니다."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_HELP_JOYPAD_DRIVER_SDL,
+   "SDL 라이브러리 기반 컨트롤러 드라이버입니다."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_HELP_JOYPAD_DRIVER_UDEV,
+   "udev 인터페이스가 있는 컨트롤러 드라이버가 일반적으로 권장됩니다. 조이스틱 지원을 위해 최신 evdev 조이패드 API를 사용합니다. 핫플러그 및 강제 피드백을 지원합니다.\n기본적으로 대부분의 배포판에서, /dev/input 노드는 루트 전용입니다(모드 600). 루트가 아닌 사용자도 액세스할 수 있도록 udev 규칙을 설정할 수 있습니다."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_HELP_JOYPAD_DRIVER_XINPUT,
+   "XInput 컨트롤러 드라이버. 주로 XBox 컨트롤러용입니다."
+   )
+
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_VIDEO_DRIVER,
    "비디오 드라이버"
@@ -1752,7 +1785,7 @@ MSG_HASH(
    )
 MSG_HASH(
    MENU_ENUM_SUBLABEL_MENU_DRIVER,
-   "사용할 메뉴 드라이버입니다."
+   "사용할 메뉴 드라이버입니다. 다시 시작해야 합니다."
    )
 MSG_HASH(
    MENU_ENUM_LABEL_HELP_MENU_DRIVER_XMB,
@@ -1866,12 +1899,84 @@ MSG_HASH(
    "검은 프레임 삽입"
    )
 MSG_HASH(
-   MENU_ENUM_SUBLABEL_VIDEO_BLACK_FRAME_INSERTION,
-   "프레임 사이 검은 프레임을 삽입합니다. 120Hz 디스플레이에서 60Hz 콘텐츠 실행 시 고스트 현상을 줄이는데 유용합니다."
+   MENU_ENUM_LABEL_VALUE_VIDEO_BLACK_FRAME_INSERTION_VALUE_OFF,
+   "끔"
    )
 MSG_HASH(
-   MENU_ENUM_LABEL_HELP_VIDEO_BLACK_FRAME_INSERTION,
-   "프레임 사이에 검은색 프레임을 삽입합니다. 120Hz 모니터에서 고스팅이 제거된 60Hz 자료를 실행하는 데 유용합니다. 비디오 새로 고침 빈도는 60Hz 모니터상태 그대로 구성해야 합니다(새로 고침 빈도를 2로 나눔)."
+   MENU_ENUM_LABEL_VALUE_VIDEO_BLACK_FRAME_INSERTION_VALUE_120,
+   "1 - 120Hz 디스플레이 주사율"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_BLACK_FRAME_INSERTION_VALUE_180,
+   "2 - 180Hz용 디스플레이 주사율"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_BLACK_FRAME_INSERTION_VALUE_240,
+   "3 - 240Hz용 디스플레이 주사율"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_BLACK_FRAME_INSERTION_VALUE_300,
+   "4 - 300Hz용 디스플레이 주사율"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_BLACK_FRAME_INSERTION_VALUE_360,
+   "5 - 360Hz용 디스플레이 주사율"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_BLACK_FRAME_INSERTION_VALUE_420,
+   "6 - 420Hz 디스플레이 주사율"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_BLACK_FRAME_INSERTION_VALUE_480,
+   "7 - 480Hz 디스플레이 주사율"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_BLACK_FRAME_INSERTION_VALUE_540,
+   "8 - 540Hz용 디스플레이 주사율"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_BLACK_FRAME_INSERTION_VALUE_600,
+   "9 - 600Hz용 디스플레이 주사율"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_BLACK_FRAME_INSERTION_VALUE_660,
+   "10 - 660Hz용 디스플레이 주사율"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_BLACK_FRAME_INSERTION_VALUE_720,
+   "11 - 720Hz 디스플레이 주사율"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_BLACK_FRAME_INSERTION_VALUE_780,
+   "12 - 780Hz 디스플레이 주사율"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_BLACK_FRAME_INSERTION_VALUE_840,
+   "13 - 840Hz용 디스플레이 주사율"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_BLACK_FRAME_INSERTION_VALUE_900,
+   "14 - 900Hz용 디스플레이 주사율"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_BLACK_FRAME_INSERTION_VALUE_960,
+   "15 - 960Hz용 디스플레이 주사율"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_BFI_DARK_FRAMES,
+   "검정색 프레임 삽입 - 어두운 프레임"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_VIDEO_BFI_DARK_FRAMES,
+   "총 BFI 스캔 아웃 시퀀스에서 검정색 프레임 수를 조정합니다. 많을수록 모션 선명도가 높아지고, 낮을수록 밝기가 높아집니다. 총 작업할 BFI 프레임이 1개뿐이므로 120hz에서는 적용할 수 없습니다. 가능한 것보다 높게 설정하면 선택한 주사율에 대해 가능한 최대값이 제한됩니다."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_HELP_VIDEO_BFI_DARK_FRAMES,
+   "검은색인 BFI 시퀀스에 표시되는 프레임 수를 조정합니다. 검은색 프레임이 많을수록 모션 선명도는 높아지지만 밝기는 감소합니다. 총 1개의 추가 60hz 프레임만 있으므로 120hz에서는 적용할 수 없습니다. 따라서 검정색이어야 합니다. 그렇지 않으면 BFI가 전혀 활성화되지 않습니다."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_SHADER_SUBFRAMES_VALUE_OFF,
+   "끔"
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_VIDEO_GPU_SCREENSHOT,
@@ -1961,6 +2066,10 @@ MSG_HASH(
    MENU_ENUM_SUBLABEL_VIDEO_FILTER_REMOVE,
    "활성중인 CPU로 동작하는 비디오 필터를 해제합니다."
    )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_NOTCH_WRITE_OVER,
+   "Android 및 iOS 기기에서 노치보다 전체 화면을 활성화"
+)
 
 /* Settings > Video > CRT SwitchRes */
 
@@ -2598,6 +2707,14 @@ MSG_HASH(
    "믹서 오디오를 음소거합니다."
    )
 MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_AUDIO_RESPECT_SILENT_MODE,
+   "무음 모드 존중"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_AUDIO_RESPECT_SILENT_MODE,
+   "무음 모드에서는 모든 오디오를 음소거합니다."
+   )
+MSG_HASH(
    MENU_ENUM_LABEL_VALUE_AUDIO_FASTFORWARD_MUTE,
    "빨리 감기 중 음소거"
    )
@@ -3207,6 +3324,14 @@ MSG_HASH(
    "'단일 버튼' 터보 모드의 기본 터보 활성화 버튼을 설정합니다."
    )
 MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_INPUT_ALLOW_TURBO_DPAD,
+   "터보 십자패드 방향 허용"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_INPUT_ALLOW_TURBO_DPAD,
+   "활성화되면 디지털 방향 입력 (십자패드 또는 'hatswitch'라고도 함) 이 터보가 될 수 있습니다."
+   )
+MSG_HASH(
    MENU_ENUM_LABEL_VALUE_INPUT_TURBO_FIRE_SETTINGS,
    "터보 입력"
    )
@@ -3265,10 +3390,6 @@ MSG_HASH(
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_ANDROID_INPUT_DISCONNECT_WORKAROUND,
    "Android 재연결 문제 우회 해결"
-   )
-MSG_HASH(
-   MENU_ENUM_LABEL_ANDROID_INPUT_DISCONNECT_WORKAROUND,
-   "연결이 끊겼다가 돌아오는 컨트롤러를 위한 우회 방안입니다. 같은 종류의 컨트롤러를 2명의 플레이어로 인식하지 않게 합니다."
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_QUIT_PRESS_TWICE,
@@ -3370,6 +3491,14 @@ MSG_HASH(
 MSG_HASH(
    MENU_ENUM_SUBLABEL_INPUT_HOTKEY_BLOCK_DELAY,
    "핫키를 눌렀을 때 일반 입력이 제한되기 전에 약간의 지연을 추가합니다. 핫키가 다른 동작(예: RetroPad '선택' 버튼)과 겹쳐서 매핑되어 있을 경우 해당 입력이 인식될 수 있게 합니다."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_INPUT_HOTKEY_DEVICE_MERGE,
+   "단축키 장치 유형 병합"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_INPUT_HOTKEY_DEVICE_MERGE,
+   "두 유형 중 하나에 '단축키 활성화'가 설정된 경우 키보드 및 컨트롤러 장치 유형 모두에서 모든 단축키를 차단합니다."
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_INPUT_MENU_ENUM_TOGGLE_GAMEPAD_COMBO,
@@ -5497,6 +5626,14 @@ MSG_HASH(
    MENU_ENUM_SUBLABEL_MENU_SETTINGS,
    "메뉴 화면 설정을 변경합니다."
    )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_APPICON_SETTINGS,
+   "앱 아이콘"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_APPICON_SETTINGS,
+   "앱 아이콘 변경합니다."
+   )
 #ifdef _3DS
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_MENU_BOTTOM_SETTINGS,
@@ -7361,6 +7498,14 @@ MSG_HASH(
    "지원되는 코어가 설치되어 있지 않더라도 콘텐츠가 스캔되어 실행목록에 추가될 수 있게 합니다."
    )
 MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SCAN_SERIAL_AND_CRC,
+   "스캔은 가능한 중복에 대해 CRC를 확인"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_SCAN_SERIAL_AND_CRC,
+   "때때로 ISO는 특히 PSP/PSN 타이틀의 경우 시리즈를 복제합니다. 시리즈에만 의존하면 스캐너가 콘텐츠를 잘못된 시스템에 배치하는 경우가 있습니다. 이렇게 하면 CRC 검사가 추가되어 스캔 속도가 상당히 느려지지만 더 정확할 수 있습니다."
+   )
+MSG_HASH(
    MENU_ENUM_LABEL_VALUE_PLAYLIST_MANAGER_LIST,
    "실행목록 관리"
    )
@@ -7609,15 +7754,15 @@ MSG_HASH( /* FIXME Not RGUI specific */
    )
 MSG_HASH( /* FIXME Not RGUI specific */
    MENU_ENUM_SUBLABEL_RGUI_BROWSER_DIRECTORY,
-   "파일 탐색기의 시작 디렉토리를 설정합니다."
+   "파일 브라우저의 시작 디렉토리를 설정합니다."
    )
 MSG_HASH( /* FIXME Not RGUI specific */
    MENU_ENUM_LABEL_VALUE_RGUI_CONFIG_DIRECTORY,
-   "구성"
+   "구성 파일"
    )
 MSG_HASH( /* FIXME Not RGUI specific */
    MENU_ENUM_SUBLABEL_RGUI_CONFIG_DIRECTORY,
-   "메뉴 구성 브라우저의 시작 디렉터리를 설정합니다."
+   "기본 구성 파일은 이 디렉터리에 저장됩니다."
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_LIBRETRO_DIR_PATH,
@@ -9239,6 +9384,10 @@ MSG_HASH(
    "세이더 프리셋 및 패스를 불러올때 파일 브라우저에서 최근 사용한 디렉토리를 엽니다."
    )
 MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_SHADER_PRESET,
+   "사전 설정 불러오기"
+   )
+MSG_HASH(
    MENU_ENUM_SUBLABEL_VIDEO_SHADER_PRESET,
    "셰이더 프리셋을 불러옵니다. 셰이더 파이프라인이 자동으로 설정됩니다."
    )
@@ -9247,8 +9396,32 @@ MSG_HASH(
    "셰이더 사전 설정을 직접 불러옵니다. 그에 따라 셰이더 메뉴가 업데이트됩니다.\n메뉴에 표시되는 배율은 사전 설정이 간단한 배율 조정 방법(예: 소스 배율 조정, X/Y에 대해 동일한 배율)을 사용하는 경우에만 신뢰할 수 있습니다."
    )
 MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_SHADER_PRESET_PREPEND,
+   "사전 설정 추가"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_VIDEO_SHADER_PRESET_PREPEND,
+   "현재 불러온 사전 설정 앞에 사전 설정을 추가합니다."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_SHADER_PRESET_APPEND,
+   "사전 설정 추가"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_VIDEO_SHADER_PRESET_APPEND,
+   "현재 불러온 사전 설정에 사전 설정을 추가합니다."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_SHADER_PRESET_SAVE,
+   "사전 설정 저장"
+   )
+MSG_HASH(
    MENU_ENUM_SUBLABEL_VIDEO_SHADER_PRESET_SAVE,
    "현재 셰이더 프리셋을 저장합니다."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_SHADER_PRESET_REMOVE,
+   "사전 설정 제거"
    )
 MSG_HASH(
    MENU_ENUM_SUBLABEL_VIDEO_SHADER_PRESET_REMOVE,
@@ -9531,6 +9704,22 @@ MSG_HASH(
    MENU_ENUM_SUBLABEL_ACHIEVEMENT_RESUME,
    "현재 세션에 대한 도전과제 하드코어 모드를 재개합니다. 치트, 뒤로 감기, 슬로우 모션, 상태저장 불러오기를 비활성화하고 게임을 초기화합니다."
    )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_ACHIEVEMENT_SERVER_UNREACHABLE,
+   "RetroAchievements 서버에 연결할 수 없음"
+)
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_ACHIEVEMENT_SERVER_UNREACHABLE,
+   "하나 이상의 Achievement 잠금 해제가 서버에 반영되지 않았습니다. 앱을 열어두는 동안 잠금 해제가 다시 시도됩니다."
+)
+MSG_HASH(
+   MENU_ENUM_LABEL_CHEEVOS_SERVER_DISCONNECTED,
+   "RetroAchievements 서버에 연결할 수 없습니다. 성공하거나 앱이 닫힐 때까지 다시 시도합니다."
+)
+MSG_HASH(
+   MENU_ENUM_LABEL_CHEEVOS_SERVER_RECONNECTED,
+   "보류 중인 모든 요청이 RetroAchievements 서버에 성공적으로 동기화되었습니다."
+)
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_NOT_LOGGED_IN,
    "로그인 되지 않음"
@@ -13837,6 +14026,10 @@ MSG_HASH(
    "이용 가능한 미리보기가 없습니다"
    )
 MSG_HASH(
+   MSG_NO_THUMBNAIL_DOWNLOAD_POSSIBLE,
+   "이 실행목록에 더 이상 미리보기 다운로드를 시도할 항목이 없습니다."
+   )
+MSG_HASH(
    MSG_PRESS_AGAIN_TO_QUIT,
    "종료하려면 한 번 더 누르세요..."
    )
@@ -14171,10 +14364,6 @@ MSG_HASH(
 MSG_HASH(
    MSG_FAILED_TO_SET_DISK,
    "디스크 설정 실패"
-   )
-MSG_HASH(
-   MSG_FAILED_TO_SET_INITIAL_DISK,
-   "최근 실행 디스크 설정 실패..."
    )
 MSG_HASH(
    MSG_FAILED_TO_CONNECT_TO_CLIENT,

@@ -1853,6 +1853,17 @@ enum retro_mod
                                             * input devices does not need to take any action on its own.
                                             */
 
+#define RETRO_ENVIRONMENT_GET_PLAYLIST_DIRECTORY 79
+                                           /* const char ** --
+                                            * Returns the "playlist" directory of the frontend.
+                                            * This directory can be used to store core generated playlists,
+                                            * in case this internal functionality is available (e.g. internal core
+                                            * game detection engine).
+                                            *
+                                            * The returned value can be NULL.
+                                            * If so, no such directory is defined,
+                                            * and it's up to the implementation to find a suitable directory.
+                                            */
 /* VFS functionality */
 
 /* File paths:
@@ -3118,7 +3129,7 @@ typedef void (RETRO_CALLCONV *retro_netpacket_send_t)(int flags, const void* buf
  * This function is not guaranteed to be thread-safe and must be called during
  * retro_run or any of the netpacket callbacks passed with this interface.
  */
-typedef void (RETRO_CALLCONV *retro_netpacket_poll_receive_t)();
+typedef void (RETRO_CALLCONV *retro_netpacket_poll_receive_t)(void);
 
 /* Called by the frontend to signify that a multiplayer session has started.
  * If client_id is 0 the local player is the host of the session and at this
