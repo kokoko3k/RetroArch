@@ -190,12 +190,13 @@ bool glslang_read_shader_file(const char *path,
       const char inject_prefix[] = "*" ;
       const char preset_defines_keyword[] = "#pragma inject_preset_code DEFINES_FROM_PRESET";
       
-      if (!strncmp(preset_defines_keyword, line, STRLEN_CONST(preset_defines_keyword)) && shader != NULL)
-            RARCH_DBG("[shader]: KOKO found injection line and shader is not null\n");
+      //if (!strncmp(preset_defines_keyword, line, STRLEN_CONST(preset_defines_keyword)) && shader != NULL)
+        //    RARCH_DBG("[shader]: KOKO found injection line and shader is not null\n");
       
       /* Check for preset injection directives*/
-      if (!strncmp(preset_defines_keyword, line, STRLEN_CONST(preset_defines_keyword)) && shader != NULL ) 
+      if (!strncmp(preset_defines_keyword, line, STRLEN_CONST(preset_defines_keyword)) && shader != NULL) 
       {
+         RARCH_DBG("[shader]: KOKO found injection line and shader is not null\n");
          /* Paste all defines */
          for ( uint k = 0 ; k < shader->last_free_define_injection_index ; k++ ) {
             int c=0;
@@ -231,7 +232,7 @@ bool glslang_read_shader_file(const char *path,
                include_path, path, include_file, sizeof(include_path));
 
          /* Parse include file */
-         if (!glslang_read_shader_file(include_path, output, false, NULL))
+         if (!glslang_read_shader_file(include_path, output, false, shader))
             goto error;
 
          /* After including a file, use line directive
