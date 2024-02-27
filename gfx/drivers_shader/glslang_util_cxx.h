@@ -53,7 +53,7 @@ struct glslang_output
    glslang_meta meta;
 };
 
-bool glslang_compile_shader(const char *shader_path, glslang_output *output);
+bool glslang_compile_shader(const char *shader_path, glslang_output *output, struct video_shader *shader);
 
 /* Helpers for internal use. */
 bool glslang_parse_meta(const struct string_list *lines, glslang_meta *meta);

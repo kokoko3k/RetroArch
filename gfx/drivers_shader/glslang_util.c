@@ -98,7 +98,7 @@ enum slang_texture_semantic slang_name_to_texture_semantic_array(
 }
 
 bool glslang_read_shader_file(const char *path,
-      struct string_list *output, bool root_file)
+      struct string_list *output, bool root_file, struct video_shader *shader)
 {
    size_t i;
    char tmp[PATH_MAX_LENGTH];
@@ -209,7 +209,7 @@ bool glslang_read_shader_file(const char *path,
                include_path, path, include_file, sizeof(include_path));
 
          /* Parse include file */
-         if (!glslang_read_shader_file(include_path, output, false))
+         if (!glslang_read_shader_file(include_path, output, false, NULL))
             goto error;
 
          /* After including a file, use line directive
