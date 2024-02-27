@@ -2432,6 +2432,14 @@ end:
    config_file_free(conf);
    config_file_free(root_conf);
 
+   
+   if (shader->num_parameters) {
+      for ( size_t i = 0; i < shader->num_parameters; i++) {
+         RARCH_DBG("[Shaders]: KOKO Preset parameter dump:*%s=%f \n", 
+         shader->parameters[i].id, shader->parameters[i].current);
+      }
+   }
+   
    return ret;
 }
 
