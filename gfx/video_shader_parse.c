@@ -1087,8 +1087,6 @@ bool video_shader_get_define_injections(
       const char *line = lines.elems[i].data;
       char inj_key[100];
       char inj_value[100];
-      char tmp[150];
-      tmp[0] = '\0';
       
       /* Injection found? */
       if (inj_to_define(line, inj_key, inj_value, *inject_prefix )) {

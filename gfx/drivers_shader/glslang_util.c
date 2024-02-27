@@ -198,7 +198,7 @@ bool glslang_read_shader_file(const char *path,
       {
          RARCH_DBG("[shader]: KOKO found injection line and shader is not null\n");
          /* Paste all defines */
-         for ( uint k = 0 ; k < shader->last_free_define_injection_index ; k++ ) {
+         for ( unsigned int k = 0 ; k < shader->last_free_define_injection_index ; k++ ) {
             int c=0;
             snprintf(tmp, sizeof(tmp), "#undef %s", shader -> define_injections[k].key);
             if (!string_list_append(output, tmp, attr)) goto error;
