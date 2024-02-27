@@ -152,6 +152,12 @@ struct video_shader_parameter
    char desc[64];
 };
 
+struct video_shader_define_injection
+{
+   char key[100];
+   char value[100];
+};
+
 struct rarch_dir_shader_list
 {
    struct string_list *shader_list;
@@ -195,6 +201,8 @@ struct video_shader_lut
 struct video_shader
 {
    struct video_shader_parameter parameters[GFX_MAX_PARAMETERS]; /* int alignment */
+   struct video_shader_define_injection define_injections[GFX_MAX_PARAMETERS]; /* int alignment */
+   unsigned last_free_define_injection_index;
    /* If < 0, no feedback pass is used. Otherwise,
     * the FBO after pass #N is passed a texture to next frame. */
    int feedback_pass;

@@ -1009,6 +1009,116 @@ bool video_shader_load_current_parameter_values(
    return true;
 }
 
+
+/* inj_to_define
+ * check if str is in format inj_char KEY = VALUE
+ * (spaces are not mandatory)
+ * returns true if str is in that format and fills "value" ans "key" accordingly
+*/
+bool inj_to_define(const char *str, char *key, char *value, char inj_char) {
+   char *lstr = malloc(strlen(str) + 1);
+   strcpy(lstr, str);
+   // remove spaces tabs and double quotes
+   int i = 0, j = 0;
+   while (lstr[i] != '\0') {
+      if (lstr[i] != ' ' && lstr[i] != '"' && lstr[i] != '\t') {
+      lstr[j++] = lstr[i];
+      }
+      i++;
+   }
+   lstr[j] = '\0';
+
+   // Does it start with inj_char
+   if (*lstr != inj_char) return false;
+
+   // Is it in format KEY=VALUE now?
+   char *eq_pos = strchr(lstr, '=');
+   if (!eq_pos) return false;
+
+   // Extract KEY,VALUE
+   *eq_pos = '\0';             // Substitute '=' with \0 to divide key and value
+   strcpy(key, lstr + 1);       // copy key skipping inj_char
+   strcpy(value, eq_pos + 1);  // copy value
+
+   return true;
+}
+
+/**
+ * video_shader_get_define_injections:
+ * @param conf
+ * Preset file to read from.
+ * @param shader
+ * Shader passes handle.
+ *
+ * 
+ * 
+ *                                                                                  KOKO FIXME WRITE DOC.
+ *                                                                                  KOKO FIXME WRITE HEADER.
+ *
+ * @return true (1) if successful, otherwise false (0).
+ **/
+
+bool video_shader_get_define_injections(
+     config_file_t *shader_preset, struct video_shader *shader) {
+   RARCH_LOG("KOKO video_shader_get_define_injections parsing: %s\n", shader_preset->path);
+   
+   /* Read file contents */
+   uint8_t *buf              = NULL;
+   int64_t buf_len           = 0;
+   struct string_list lines  = {0};
+   bool    ret               = false;
+   
+   if (!filestream_read_file(shader_preset->path, (void**)&buf, &buf_len)) {
+      RARCH_WARN("[slang]: video_shader_get_define_injections: Unable to open \"%s\".\n", shader_preset->path);
+      return false;
+   }
+   if (buf_len > 0) {
+      string_remove_all_chars((char*)buf, '\r');
+      string_list_initialize(&lines);
+      ret = string_separate_noalloc(&lines, (char*)buf, "\n");
+   }
+   if (buf) free(buf);
+   if (!ret) return false;
+   if (lines.size < 1) return false;
+   
+   /* Loop through lines of preset */
+   const char inject_prefix[] = "*" ;
+   for (size_t i = 0; i < lines.size; i++) {
+      const char *line = lines.elems[i].data;
+      char inj_key[100];
+      char inj_value[100];
+      char tmp[150];
+      tmp[0] = '\0';
+      
+      /* Injection found? */
+      if (inj_to_define(line, inj_key, inj_value, *inject_prefix )) {
+         RARCH_DBG("[slang]: KOKO got preset injection: key,value=%s,%s \n",inj_key, inj_value);
+
+         /* Override same key or append new one */
+         size_t j;
+         /* override? */            
+         RARCH_DBG("[slang]: KOKO searching for duplicate key:%s, free index at  %u\n", inj_key,  shader->last_free_define_injection_index );
+         for (j = 0; j < shader->last_free_define_injection_index; j++) {
+            RARCH_DBG("[slang]: KOKO comparing:%s %s\n", inj_key,  shader->define_injections[j].key );
+            if (!strcmp(shader->define_injections[j].key,inj_key)) {
+               strcpy(shader->define_injections[j].value, inj_value);
+               RARCH_DBG("[slang]: KOKO injection has been found and overrided ad index %u \n",j);
+               break;
+            }
+         }
+         /* append? */
+         if (j == shader->last_free_define_injection_index) {
+            strcpy(shader->define_injections[j].key,   inj_key);
+            strcpy(shader->define_injections[j].value, inj_value);
+            shader->last_free_define_injection_index++;
+            RARCH_DBG("[slang]: KOKO injection has been appended at index %u \n", j);
+         }
+      }
+   }
+   
+   return true;
+}
+
 static const char *video_shader_scale_type_to_str(enum gfx_scale_type type)
 {
    switch (type)
@@ -1952,7 +2062,7 @@ static bool video_shader_load_root_config_into_shader(
 
    /* Load the parameter values */
    video_shader_load_current_parameter_values(conf, shader);
-
+   
 #ifdef DEBUG
    RARCH_DBG("[Shaders]: Number of passes: %u\n", shader->passes);
    RARCH_DBG("[Shaders]: Number of textures: %u\n", shader->luts);
@@ -1986,6 +2096,9 @@ static bool video_shader_override_values(config_file_t *override_conf,
    if (!shader || !override_conf)
       return 0;
 
+   /* Fill/overwrite injections from preset */
+   video_shader_get_define_injections(override_conf, shader);
+   
    /* If the shader has parameters */
    if (shader->num_parameters)
    {
@@ -2290,6 +2403,9 @@ bool video_shader_load_preset_into_shader(const char *path,
    /* Set Path for originally loaded preset because it is different than the root preset path */
    strlcpy(shader->loaded_preset_path, path, sizeof(shader->loaded_preset_path));
 
+   /* init */
+   shader->last_free_define_injection_index = 0;
+   
 #ifdef DEBUG
    RARCH_DBG("\n[Shaders]: Start applying simple preset overrides..\n");
 #endif
