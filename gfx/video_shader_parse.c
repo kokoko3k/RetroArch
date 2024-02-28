@@ -62,7 +62,12 @@
 #define SHADER_NUM_WILDCARDS 15
 
 /* The character that prefix injection related directives in .slangp */
-#define INJECTION_PREFIX "*"
+#define INJECTION_PREFIX      "*"
+#define INJECTION_LOCKALL     "*LOCKALL*"
+#define INJECTION_UNLOCKALL   "*UNLOCKALL*"
+#define INJECTION_LOCKVALUE   "*LOCK"
+#define INJECTION_UNLOCKVALUE "*UNLOCK"
+
 
 static struct wildcard_token wildcard_tokens[SHADER_NUM_WILDCARDS] = {
    {RARCH_WILDCARD_CONTENT_DIR,                 "$CONTENT-DIR$"},
@@ -1191,10 +1196,10 @@ bool video_shader_load_define_injections(
  
             RARCH_DBG("[Injections]: Got preset injection: %s=%s\n",inj_key, inj_value);
             /* Remove key? */
-            if (!strcmp(inj_value,"*UNLOCK")) {
+            if (!strcmp(inj_value, INJECTION_UNLOCKVALUE)) {
                injection_delete(shader, inj_key);
             /* Lock a key with a value from params */
-            } else if (!strcmp(inj_value,"*LOCK")) {
+            } else if (!strcmp(inj_value, INJECTION_LOCKVALUE )) {
                injection_lock_no_value(shader, line, inj_key);
             } else { 
                injection_override_or_append(shader, inj_key, inj_value);
@@ -1205,9 +1210,9 @@ bool video_shader_load_define_injections(
          char *str = malloc(strlen(line) + 1);
          strcpy(str, line);
          string_trim_whitespace(str);
-         if ( !strcmp(str, "*LOCKALL*") )
+         if ( !strcmp(str, INJECTION_LOCKALL ) )
             injection_lock_all_parameters(shader);
-         else if ( !strcmp(str, "*UNLOCKALL*") ) 
+         else if ( !strcmp(str, INJECTION_UNLOCKALL ) ) 
             injection_unlock_all_parameters(shader);
       }
    }
