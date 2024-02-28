@@ -187,7 +187,6 @@ bool glslang_read_shader_file(const char *path,
    {
       const char *line   = lines.elems[i].data;
 
-      const char inject_prefix[] = "*" ;
       const char preset_defines_keyword[] = "#pragma inject_preset_code DEFINES_FROM_PRESET";
       
       //if (!strncmp(preset_defines_keyword, line, STRLEN_CONST(preset_defines_keyword)) && shader != NULL)
