@@ -188,24 +188,24 @@ bool glslang_read_shader_file(const char *path,
       const char *line   = lines.elems[i].data;
 
       const char preset_defines_keyword[] = "#pragma inject_preset_code DEFINES_FROM_PRESET";
-      
-      //if (!strncmp(preset_defines_keyword, line, STRLEN_CONST(preset_defines_keyword)) && shader != NULL)
-        //    RARCH_DBG("[shader]: KOKO found injection line and shader is not null\n");
-      
+           
       /* Check for preset injection directives*/
       if (!strncmp(preset_defines_keyword, line, STRLEN_CONST(preset_defines_keyword)) && shader != NULL) 
       {
-         //RARCH_DBG("[shader]: KOKO found injection line and shader is not null\n");
          /* Paste all defines */
          for ( unsigned int k = 0 ; k < shader->last_free_define_injection_index ; k++ ) {
             int c=0;
-            snprintf(tmp, sizeof(tmp), "#undef %s", shader -> define_injections[k].key);
-            if (!string_list_append(output, tmp, attr)) goto error;
-            RARCH_DBG("[shader]: Injected #undef %s\n", shader -> define_injections[k].key);
-            
-            snprintf(tmp, sizeof(tmp), "#define %s %s", shader -> define_injections[k].key, shader -> define_injections[k].value);
-            RARCH_DBG("[shader]: Injected #define %s %s\n", shader -> define_injections[k].key, shader -> define_injections[k].value );
-            if (!string_list_append(output, tmp, attr)) goto error;
+            if (strcmp("", string_trim_whitespace( shader->define_injections[k].key) )) {  //no empty keys
+               snprintf(tmp, sizeof(tmp), "#undef %s", shader -> define_injections[k].key);
+               if (!string_list_append(output, tmp, attr)) goto error;
+               RARCH_DBG("[shader]: Injected #undef %s\n", shader -> define_injections[k].key);
+               
+               snprintf(tmp, sizeof(tmp), "#define %s %s", shader -> define_injections[k].key, shader -> define_injections[k].value);
+               RARCH_DBG("[shader]: Injected #define %s %s\n", shader -> define_injections[k].key, shader -> define_injections[k].value );
+               if (!string_list_append(output, tmp, attr)) goto error;
+            } else {
+               RARCH_DBG("EMPTY!");
+            }
          }
       }
       
