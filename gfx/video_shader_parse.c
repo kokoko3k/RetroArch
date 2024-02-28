@@ -1320,7 +1320,15 @@ static bool video_shader_write_root_preset(const struct video_shader *shader,
       for (i = 0; i < shader->num_parameters; i++)
          if (shader->parameters[i].current != shader->parameters[i].initial)
             config_set_float(conf, shader->parameters[i].id, shader->parameters[i].current);
-
+   
+   /* Write injection keys into the full preset */
+   if (shader->last_free_define_injection_index > 0.0)
+      for (i = 0; i < shader->last_free_define_injection_index; i++) {
+         char inject_prefix[] = INJECTION_PREFIX ;
+         config_set_string(conf, strcat(inject_prefix, shader->define_injections[i].key),
+                           shader->define_injections[i].value);
+      }
+   
    if (shader->luts)
    {
       char textures[4096];
