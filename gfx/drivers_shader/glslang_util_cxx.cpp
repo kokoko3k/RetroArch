@@ -219,12 +219,12 @@ bool glslang_compile_shader(const char *shader_path, glslang_output *output, str
       return false;
 
    RARCH_LOG("[slang]: Compiling shader: \"%s\".\n", shader_path);
-   if (shader != NULL)
-      RARCH_LOG("[slang]: KOKO attempting to call: glslang_read_shader_file\n" );
+
    if (!glslang_read_shader_file(shader_path, &lines, true, shader)) {
       RARCH_LOG("[slang]: KOKO error in glslang_read_shader_file\n" );
       goto error;
    }
+   
    output->meta = glslang_meta{};
    if (!glslang_parse_meta(&lines, &output->meta))
       goto error;
