@@ -198,13 +198,13 @@ bool glslang_read_shader_file(const char *path,
             if (strcmp("", string_trim_whitespace( shader->define_injections[k].key) )) {  //no empty keys
                snprintf(tmp, sizeof(tmp), "#undef %s", shader -> define_injections[k].key);
                if (!string_list_append(output, tmp, attr)) goto error;
-               RARCH_DBG("[shader]: Injected #undef %s\n", shader -> define_injections[k].key);
+               RARCH_DBG("[Injections]: Injected #undef %s\n", shader -> define_injections[k].key);
                
                snprintf(tmp, sizeof(tmp), "#define %s %s", shader -> define_injections[k].key, shader -> define_injections[k].value);
-               RARCH_DBG("[shader]: Injected #define %s %s\n", shader -> define_injections[k].key, shader -> define_injections[k].value );
+               RARCH_DBG("[Injections]: Injected #define %s %s\n", shader -> define_injections[k].key, shader -> define_injections[k].value );
                if (!string_list_append(output, tmp, attr)) goto error;
             } else {
-               RARCH_DBG("EMPTY!");
+               RARCH_WARN("[Injections]: Empty key found.");
             }
          }
       }

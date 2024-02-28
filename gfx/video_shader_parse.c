@@ -1035,28 +1035,33 @@ bool inj_to_define(const char *str, char *key, char *value, const char inj_char)
    if (!eq_pos) return false;
 
    // Extract KEY,VALUE
-   *eq_pos = '\0';             // Substitute '=' with \0 to divide key and value
+   *eq_pos = '\0';              // Substitute '=' with \0 to divide key and value
    strcpy(key, lstr + 1);       // copy key skipping inj_char
-   strcpy(value, eq_pos + 1);  // copy value
+   strcpy(value, eq_pos + 1);   // copy value
 
+   
+   if (string_is_empty(string_trim_whitespace(key))) {
+      RARCH_DBG("[Injections]: Got empty key from %s", str);
+      return false;
+   }
+      
    return true;
 }
 
-bool injection_override_or_append(struct video_shader *shader, const char *line, 
-                                  char *key, char *value) {
+bool injection_override_or_append(struct video_shader *shader, char *key, char *value) {
 
       /* Search for an existing key to override */            
       for ( size_t j = 0; j < shader->last_free_define_injection_index; j++) {
          if (!strcmp(shader->define_injections[j].key, key)) {
                strcpy(shader->define_injections[j].value, value);
-               RARCH_DBG("[slang]: KOKO injection has been found and overrided ad index %u \n",j);
+               RARCH_DBG("[Injections]: Injection %s has been found and overrided ad index %u \n", key, j);
                return true;
          }
       }
       
       /* No free slot to append? */
       if (shader -> last_free_define_injection_index >= INJ_MAX_DEFINES) {
-         RARCH_LOG("[slang]: Cannot inject %s, too many injections.\n", key);
+         RARCH_LOG("[Injections]: Cannot inject %s, too many injections.\n", key);
          return false;
       }
       
@@ -1064,12 +1069,11 @@ bool injection_override_or_append(struct video_shader *shader, const char *line,
       strcpy(shader->define_injections[shader->last_free_define_injection_index].key,   key);
       strcpy(shader->define_injections[shader->last_free_define_injection_index].value, value);
       shader->last_free_define_injection_index++;
-      RARCH_DBG("[slang]: Injection has been appended at index %u \n", shader->last_free_define_injection_index);
+      RARCH_DBG("[Injections]: Injection %s has been appended at index %u \n", key, shader->last_free_define_injection_index);
       return true;
 }
 
-bool injection_delete(struct video_shader *shader, const char *line, 
-                       char *key, char *value) {
+bool injection_delete(struct video_shader *shader, char *key) {
    /* if key is found, copy last element over it
     * and decrement maximum index */
    /* Search for an existing key to override */      
@@ -1090,13 +1094,53 @@ bool injection_delete(struct video_shader *shader, const char *line,
                strcpy(shader->define_injections[ shader->last_free_define_injection_index ].value, "");
                
                
-               RARCH_DBG("[slang]: Injection %s has been deleted from index %u\n", key, j);
+               RARCH_DBG("[Injections]: Injection %s has been deleted from index %u\n", key, j);
                return true;
          }
    }  
-   RARCH_DBG("[slang]: Injection %s has been not been found: %s\n", key);
+   RARCH_DBG("[Injections]: Injection %s has been not been found: %s\n", key);
    return false;
 }
+
+bool injection_lock_no_value(struct video_shader *shader, const char *line, char *key) {
+   /* Search for a parameter = key
+    * then override/append key = value from the found parameter.
+   */
+   for (size_t i = 0; i < shader-> num_parameters; i++) {
+      if (!strcmp( shader->parameters[i].id, key)) {
+         RARCH_DBG("[Injections]: injection_lock_no_value() Found, locking %s \n", key);
+         char value[100];
+         sprintf(value, "%f", shader->parameters[i].current);
+         injection_override_or_append(shader, key, value);
+         return true;
+      }
+   }
+   RARCH_WARN("[Injections]: injection_lock_no_value() %s NOT found\n", key);
+   return true;
+}
+
+void injection_lock_all_parameters(struct video_shader *shader) {
+   /* for each parameter.id, parameter.current
+    * override/append a new injection with key=parameter.id and value=parameter.current
+    */
+   for (size_t i = 0; i < shader-> num_parameters; i++) {
+      char value[100];
+      sprintf(value, "%f", shader->parameters[i].current);
+      injection_override_or_append(shader, 
+                                   shader->parameters[i].id,
+                                   value);
+   }
+}
+
+void injection_unlock_all_parameters(struct video_shader *shader) {
+   /* for each parameter.id, parameter.current
+    * override/append a new injection with key=parameter.id and value=parameter.current
+    */
+   for (size_t i = 0; i < shader-> num_parameters; i++) {
+      injection_delete(shader, shader->parameters[i].id);
+   }
+}
+
 /**
  * video_shader_load_define_injections:
  * @param conf
@@ -1114,7 +1158,7 @@ bool injection_delete(struct video_shader *shader, const char *line,
 
 bool video_shader_load_define_injections(
    config_file_t *shader_preset, struct video_shader *shader) {
-   RARCH_LOG("KOKO video_shader_get_define_injections parsing: %s\n", shader_preset->path);
+   RARCH_LOG("[Injections] video_shader_get_define_injections parsing: %s\n", shader_preset->path);
    
    /* Read file contents */
    uint8_t *buf              = NULL;
@@ -1123,7 +1167,7 @@ bool video_shader_load_define_injections(
    bool    ret               = false;
    
    if (!filestream_read_file(shader_preset->path, (void**)&buf, &buf_len)) {
-      RARCH_WARN("[slang]: video_shader_get_define_injections: Unable to open \"%s\".\n", shader_preset->path);
+      RARCH_WARN("[Injections]: video_shader_get_define_injections: Unable to open \"%s\".\n", shader_preset->path);
       return false;
    }
    if (buf_len > 0) {
@@ -1144,18 +1188,27 @@ bool video_shader_load_define_injections(
 
       /* Injection line found? */
       if (inj_to_define(line, inj_key, inj_value, *inject_prefix )) {
-         
-         if (!strcmp("", string_trim_whitespace(inj_key))) {
-            RARCH_WARN("[slang]: Warning, empty injection key %s\n", inj_key);
-         } else {
-            RARCH_DBG("[slang]: Got preset injection: %s=%s\n",inj_key, inj_value);
+ 
+            RARCH_DBG("[Injections]: Got preset injection: %s=%s\n",inj_key, inj_value);
+            /* Remove key? */
             if (!strcmp(inj_value,"*UNLOCK")) {
-               injection_delete(shader, line, inj_key, inj_value);
-            } else {
-               injection_override_or_append(shader, line, inj_key, inj_value);
+               injection_delete(shader, inj_key);
+            /* Lock a key with a value from params */
+            } else if (!strcmp(inj_value,"*LOCK")) {
+               injection_lock_no_value(shader, line, inj_key);
+            } else { 
+               injection_override_or_append(shader, inj_key, inj_value);
             }
-         }
          
+      } else {
+         /* Search for directives *NOT* in format KEY=VALUE */
+         char *str = malloc(strlen(line) + 1);
+         strcpy(str, line);
+         string_trim_whitespace(str);
+         if ( !strcmp(str, "*LOCKALL*") )
+            injection_lock_all_parameters(shader);
+         else if ( !strcmp(str, "*UNLOCKALL*") ) 
+            injection_unlock_all_parameters(shader);
       }
    }
    return true;
