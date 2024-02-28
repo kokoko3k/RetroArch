@@ -1114,7 +1114,8 @@ bool injection_override_or_append(struct video_shader *shader, char *key, char *
  * Return false if key has not been found.
  * 
  **/
-bool injection_delete(struct video_shader *shader, char *key) {
+bool injection_delete(struct video_shader *shader, char *key)
+{
    /* if key is found, copy last element over it
     * and decrement maximum index */
    /* Search for an existing key to override */      
@@ -1161,11 +1162,9 @@ bool injection_delete(struct video_shader *shader, char *key) {
  * Return false when injection could not be done.
  * 
  **/
-bool injection_lock_no_value(struct video_shader *shader, const char *line, char *key) {
-   /* Search for a parameter = key
-    * then override/append key = value from the found parameter.
-   */
-   for (size_t i = 0; i < shader-> num_parameters; i++) {
+bool injection_lock_no_value(struct video_shader *shader, const char *line, char *key)
+{
+   for (size_t i = 0; i < shader->num_parameters; i++) {
       if (!strcmp( shader->parameters[i].id, key)) {
          RARCH_DBG("[Injections]: injection_lock_no_value() Found, locking %s \n", key);
          char value[100];
@@ -1178,20 +1177,42 @@ bool injection_lock_no_value(struct video_shader *shader, const char *line, char
    return true;
 }
 
-void injection_lock_all_parameters(struct video_shader *shader) {
-   /* for each parameter.id, parameter.current
-    * override/append a new injection with key=parameter.id and value=parameter.current
-    */
-   for (size_t i = 0; i < shader-> num_parameters; i++) {
+/** 
+ * inj_to_define
+ * @param str
+ * string to search for matching KEY = VALUE
+ * @param key
+ * output: put KEY there
+ * @param value
+ * output: put VALUE there
+ * 
+ * Strips extra spaces and double quotes too.
+ * Returns false if no KEY = VALUE is found
+ * 
+ **/
+void injection_lock_all_parameters(struct video_shader *shader)
+{
+   for (size_t i = 0; i < shader->num_parameters; i++) {
       char value[100];
       sprintf(value, "%f", shader->parameters[i].current);
+      RARCH_DBG("[Injections]: injection_lock_all_parameters(), locking %s to %s \n", shader->parameters[i].id, value);
       injection_override_or_append(shader, 
                                    shader->parameters[i].id,
                                    value);
    }
 }
 
-void injection_unlock_all_parameters(struct video_shader *shader) {
+/** 
+ * injection_unlock_all_parameters
+ * @param shader
+ * retroarch shader struct containing 
+ * parameters and define_injections
+ * 
+ * Delete all injections
+ * 
+ **/
+void injection_unlock_all_parameters(struct video_shader *shader)
+{
    /* for each parameter.id, parameter.current
     * override/append a new injection with key=parameter.id and value=parameter.current
     */
@@ -2258,9 +2279,6 @@ static bool video_shader_override_values(config_file_t *override_conf,
 
    if (!shader || !override_conf)
       return 0;
-
-   /* Fill/overwrite injections from preset */
-   video_shader_load_define_injections(override_conf, shader);
    
    /* If the shader has parameters */
    if (shader->num_parameters)
@@ -2335,6 +2353,9 @@ static bool video_shader_override_values(config_file_t *override_conf,
       free(override_tex_path);
    }
 
+   /* Fill/overwrite injections from preset, keep this at end of the function */
+   video_shader_load_define_injections(override_conf, shader);
+   
    return return_val;
 }
 
