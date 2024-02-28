@@ -61,9 +61,6 @@
 #define SHADER_MAX_REFERENCE_DEPTH 16
 #define SHADER_NUM_WILDCARDS 15
 
-/* The character that prefix injection related directives in .slangp */
-#define INJECTION_PREFIX "*"
-
 static struct wildcard_token wildcard_tokens[SHADER_NUM_WILDCARDS] = {
    {RARCH_WILDCARD_CONTENT_DIR,                 "$CONTENT-DIR$"},
    {RARCH_WILDCARD_CORE,                        "$CORE$"},
@@ -1081,7 +1078,7 @@ bool video_shader_get_define_injections(
    if (lines.size < 1) return false;
    
    /* Loop through lines of preset */
-   const char inject_prefix[] = INJECTION_PREFIX ;
+   const char inject_prefix[] = "*" ;
    for (size_t i = 0; i < lines.size; i++) {
       const char *line = lines.elems[i].data;
       char inj_key[100];
