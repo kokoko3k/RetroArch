@@ -1145,7 +1145,7 @@ bool video_shader_get_define_injections(
       /* Injection line found? */
       if (inj_to_define(line, inj_key, inj_value, *inject_prefix )) {
          
-         if (strcmp("", string_trim_whitespace(inj_key))) {
+         if (!strcmp("", string_trim_whitespace(inj_key))) {
             RARCH_WARN("[slang]: Warning, empty injection key %s\n", inj_key);
          } else {
             RARCH_DBG("[slang]: Got preset injection: %s=%s\n",inj_key, inj_value);
