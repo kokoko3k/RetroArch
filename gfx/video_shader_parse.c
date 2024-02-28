@@ -1013,12 +1013,19 @@ bool video_shader_load_current_parameter_values(
    return true;
 }
 
-
-/* inj_to_define
- * check if str is in format inj_char KEY = VALUE
- * (spaces are not mandatory)
- * returns true if str is in that format and fills "value" ans "key" accordingly
-*/
+/** 
+ * inj_to_define
+ * @param str
+ * string to search for matching KEY = VALUE
+ * @param key
+ * output: put KEY there
+ * @param value
+ * output: put VALUE there
+ * 
+ * Strips extra spaces and double quotes too.
+ * Returns false if no KEY = VALUE is found
+ * 
+ **/
 bool inj_to_define(const char *str, char *key, char *value, const char inj_char) {
    char *lstr = malloc(strlen(str) + 1);
    strcpy(lstr, str);
@@ -1053,8 +1060,24 @@ bool inj_to_define(const char *str, char *key, char *value, const char inj_char)
    return true;
 }
 
-bool injection_override_or_append(struct video_shader *shader, char *key, char *value) {
-
+/** 
+ * injection_override_or_append
+ * @param shader
+ * retroarch shader struct containing define_injections to be filled
+ * @param key
+ * input: read key from there
+ * @param value
+ * input: read VALUE from there
+ * 
+ * Fills shader key/value injections.
+ * If key is found, key/value are replaced
+ * if not, new key/value are appended
+ * 
+ * Return false when injection could not be done.
+ * 
+ **/
+bool injection_override_or_append(struct video_shader *shader, char *key, char *value)
+{
       /* Search for an existing key to override */            
       for ( size_t j = 0; j < shader->last_free_define_injection_index; j++) {
          if (!strcmp(shader->define_injections[j].key, key)) {
@@ -1078,6 +1101,19 @@ bool injection_override_or_append(struct video_shader *shader, char *key, char *
       return true;
 }
 
+/** 
+ * injection_delete
+ * @param shader
+ * retroarch shader struct containing define_injections to be deleted
+ * @param key
+ * input: key to search and delete
+ * 
+ * Search key into shader.injections[].key and deletes it.
+ * Last key in array is copied over and array max index is decreased by 1
+ * 
+ * Return false if key has not been found.
+ * 
+ **/
 bool injection_delete(struct video_shader *shader, char *key) {
    /* if key is found, copy last element over it
     * and decrement maximum index */
@@ -1107,6 +1143,24 @@ bool injection_delete(struct video_shader *shader, char *key) {
    return false;
 }
 
+/** 
+ * injection_lock_no_value
+ * @param shader
+ * retroarch shader struct containing 
+ * parameters and define_injections
+ * 
+ * @param line
+ * input: read key from there
+ * @param value
+ * input: read VALUE from there
+ * 
+ * Fills shader key/value injections.
+ * If key is found, key/value are replaced
+ * if not, new key/value are appended
+ * 
+ * Return false when injection could not be done.
+ * 
+ **/
 bool injection_lock_no_value(struct video_shader *shader, const char *line, char *key) {
    /* Search for a parameter = key
     * then override/append key = value from the found parameter.
@@ -2549,14 +2603,6 @@ end:
    config_file_free(conf);
    config_file_free(root_conf);
 
-   
-   /*if (shader->num_parameters) {
-      for ( size_t i = 0; i < shader->num_parameters; i++) {
-         RARCH_DBG("[Shaders]: KOKO Preset parameter dump:*%s=%f \n", 
-         shader->parameters[i].id, shader->parameters[i].current);
-      }
-   }*/
-   
    return ret;
 }
 
