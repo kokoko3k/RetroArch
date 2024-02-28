@@ -1014,7 +1014,7 @@ bool video_shader_load_current_parameter_values(
  * (spaces are not mandatory)
  * returns true if str is in that format and fills "value" ans "key" accordingly
 */
-bool inj_to_define(const char *str, char *key, char *value, char inj_char) {
+bool inj_to_define(const char *str, char *key, char *value, const char inj_char) {
    char *lstr = malloc(strlen(str) + 1);
    strcpy(lstr, str);
    // remove spaces tabs and double quotes
@@ -1042,6 +1042,61 @@ bool inj_to_define(const char *str, char *key, char *value, char inj_char) {
    return true;
 }
 
+bool injection_override_or_append(struct video_shader *shader, const char *line, 
+                                  char *key, char *value) {
+
+      /* Search for an existing key to override */            
+      for ( size_t j = 0; j < shader->last_free_define_injection_index; j++) {
+         if (!strcmp(shader->define_injections[j].key, key)) {
+               strcpy(shader->define_injections[j].value, value);
+               RARCH_DBG("[slang]: KOKO injection has been found and overrided ad index %u \n",j);
+               return true;
+         }
+      }
+      
+      /* No free slot to append? */
+      if (shader -> last_free_define_injection_index >= INJ_MAX_DEFINES) {
+         RARCH_LOG("[slang]: Cannot inject %s, too many injections.\n", key);
+         return false;
+      }
+      
+      /* Append */
+      strcpy(shader->define_injections[shader->last_free_define_injection_index].key,   key);
+      strcpy(shader->define_injections[shader->last_free_define_injection_index].value, value);
+      shader->last_free_define_injection_index++;
+      RARCH_DBG("[slang]: Injection has been appended at index %u \n", shader->last_free_define_injection_index);
+      return true;
+}
+
+bool injection_delete(struct video_shader *shader, const char *line, 
+                       char *key, char *value) {
+   /* if key is found, copy last element over it
+    * and decrement maximum index */
+   /* Search for an existing key to override */      
+      for ( size_t j = 0; j < shader->last_free_define_injection_index; j++) {
+         //RARCH_DBG("[slang]: Searching for %s, comparing with %s\n", shader->define_injections[j].key, key);
+         if (!strcmp(shader->define_injections[j].key, key)) {
+               /* copy last element over it */
+               strcpy( shader->define_injections[j].key,
+                     shader->define_injections[shader->last_free_define_injection_index-1].key);
+               strcpy( shader->define_injections[j].value,
+                     shader->define_injections[shader->last_free_define_injection_index-1].value);
+               
+               /* decrease max index */
+               shader->last_free_define_injection_index--;
+               
+               /* Defensive programming, blank last free index */
+               strcpy(shader->define_injections[ shader->last_free_define_injection_index ].key,   "");
+               strcpy(shader->define_injections[ shader->last_free_define_injection_index ].value, "");
+               
+               
+               RARCH_DBG("[slang]: Injection %s has been deleted from index %u\n", key, j);
+               return true;
+         }
+   }  
+   RARCH_DBG("[slang]: Injection %s has been not been found: %s\n", key);
+   return false;
+}
 /**
  * video_shader_get_define_injections:
  * @param conf
@@ -1086,35 +1141,18 @@ bool video_shader_get_define_injections(
       const char *line = lines.elems[i].data;
       char inj_key[100];
       char inj_value[100];
-      
-      /* Injection found? */
+
+      /* Injection line found? */
       if (inj_to_define(line, inj_key, inj_value, *inject_prefix )) {
          RARCH_DBG("[slang]: KOKO got preset injection: %s=%s\n",inj_key, inj_value);
-
-         /* Override same key or append new one */
-         size_t j;
-         /* override? */            
-         //RARCH_DBG("[slang]: KOKO searching for duplicate key:%s, free index at  %u\n", inj_key,  shader->last_free_define_injection_index );
-         for (j = 0; j < shader->last_free_define_injection_index; j++) {
-            //RARCH_DBG("[slang]: KOKO comparing:%s %s\n", inj_key,  shader->define_injections[j].key );
-            if (!strcmp(shader->define_injections[j].key,inj_key)) {
-               strcpy(shader->define_injections[j].value, inj_value);
-               RARCH_DBG("[slang]: KOKO injection has been found and overrided ad index %u \n",j);
-               break;
-            }
-         }
-         /* append if there is a free slot */
-         if (shader -> last_free_define_injection_index < INJ_MAX_DEFINES) {
-            if (j == shader->last_free_define_injection_index) {
-               strcpy(shader->define_injections[j].key,   inj_key);
-               strcpy(shader->define_injections[j].value, inj_value);
-               shader->last_free_define_injection_index++;
-               RARCH_DBG("[slang]: KOKO injection has been appended at index %u \n", j);
-            }
+         
+         if (!strcmp(inj_value,"*UNLOCK")) {
+            injection_delete(shader, line, inj_key, inj_value);
          } else {
-            RARCH_LOG("[slang]: Cannot inject %s, too many injections.\n", inj_key);
+            injection_override_or_append(shader, line, inj_key, inj_value);
          }
       }
+      
    }
    
    return true;
