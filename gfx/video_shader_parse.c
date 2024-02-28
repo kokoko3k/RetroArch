@@ -1098,7 +1098,7 @@ bool injection_delete(struct video_shader *shader, const char *line,
    return false;
 }
 /**
- * video_shader_get_define_injections:
+ * video_shader_load_define_injections:
  * @param conf
  * Preset file to read from.
  * @param shader
@@ -1112,8 +1112,8 @@ bool injection_delete(struct video_shader *shader, const char *line,
  * @return true (1) if successful, otherwise false (0).
  **/
 
-bool video_shader_get_define_injections(
-     config_file_t *shader_preset, struct video_shader *shader) {
+bool video_shader_load_define_injections(
+   config_file_t *shader_preset, struct video_shader *shader) {
    RARCH_LOG("KOKO video_shader_get_define_injections parsing: %s\n", shader_preset->path);
    
    /* Read file contents */
@@ -2111,6 +2111,9 @@ static bool video_shader_load_root_config_into_shader(
    /* Load the parameter values */
    video_shader_load_current_parameter_values(conf, shader);
    
+   /* Load injections */
+   video_shader_load_define_injections(conf, shader);
+   
 #ifdef DEBUG
    RARCH_DBG("[Shaders]: Number of passes: %u\n", shader->passes);
    RARCH_DBG("[Shaders]: Number of textures: %u\n", shader->luts);
@@ -2145,7 +2148,7 @@ static bool video_shader_override_values(config_file_t *override_conf,
       return 0;
 
    /* Fill/overwrite injections from preset */
-   video_shader_get_define_injections(override_conf, shader);
+   video_shader_load_define_injections(override_conf, shader);
    
    /* If the shader has parameters */
    if (shader->num_parameters)
