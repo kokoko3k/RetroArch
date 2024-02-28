@@ -1144,17 +1144,20 @@ bool video_shader_get_define_injections(
 
       /* Injection line found? */
       if (inj_to_define(line, inj_key, inj_value, *inject_prefix )) {
-         RARCH_DBG("[slang]: KOKO got preset injection: %s=%s\n",inj_key, inj_value);
          
-         if (!strcmp(inj_value,"*UNLOCK")) {
-            injection_delete(shader, line, inj_key, inj_value);
+         if (strcmp("", string_trim_whitespace(inj_jey))) {
+            RARCH_WARN("[slang]: Warning, empty injection key %s". inj_key);
          } else {
-            injection_override_or_append(shader, line, inj_key, inj_value);
+            RARCH_DBG("[slang]: Got preset injection: %s=%s\n",inj_key, inj_value);
+            if (!strcmp(inj_value,"*UNLOCK")) {
+               injection_delete(shader, line, inj_key, inj_value);
+            } else {
+               injection_override_or_append(shader, line, inj_key, inj_value);
+            }
          }
+         
       }
-      
    }
-   
    return true;
 }
 
