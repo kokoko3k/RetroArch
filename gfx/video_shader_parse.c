@@ -1086,26 +1086,30 @@ bool video_shader_get_define_injections(
       
       /* Injection found? */
       if (inj_to_define(line, inj_key, inj_value, *inject_prefix )) {
-         RARCH_DBG("[slang]: KOKO got preset injection: key,value=%s,%s \n",inj_key, inj_value);
+         RARCH_DBG("[slang]: KOKO got preset injection: %s=%s\n",inj_key, inj_value);
 
          /* Override same key or append new one */
          size_t j;
          /* override? */            
-         RARCH_DBG("[slang]: KOKO searching for duplicate key:%s, free index at  %u\n", inj_key,  shader->last_free_define_injection_index );
+         //RARCH_DBG("[slang]: KOKO searching for duplicate key:%s, free index at  %u\n", inj_key,  shader->last_free_define_injection_index );
          for (j = 0; j < shader->last_free_define_injection_index; j++) {
-            RARCH_DBG("[slang]: KOKO comparing:%s %s\n", inj_key,  shader->define_injections[j].key );
+            //RARCH_DBG("[slang]: KOKO comparing:%s %s\n", inj_key,  shader->define_injections[j].key );
             if (!strcmp(shader->define_injections[j].key,inj_key)) {
                strcpy(shader->define_injections[j].value, inj_value);
                RARCH_DBG("[slang]: KOKO injection has been found and overrided ad index %u \n",j);
                break;
             }
          }
-         /* append? */
-         if (j == shader->last_free_define_injection_index) {
-            strcpy(shader->define_injections[j].key,   inj_key);
-            strcpy(shader->define_injections[j].value, inj_value);
-            shader->last_free_define_injection_index++;
-            RARCH_DBG("[slang]: KOKO injection has been appended at index %u \n", j);
+         /* append if there is a free slot */
+         if (shader -> last_free_define_injection_index < INJ_MAX_DEFINES) {
+            if (j == shader->last_free_define_injection_index) {
+               strcpy(shader->define_injections[j].key,   inj_key);
+               strcpy(shader->define_injections[j].value, inj_value);
+               shader->last_free_define_injection_index++;
+               RARCH_DBG("[slang]: KOKO injection has been appended at index %u \n", j);
+            }
+         } else {
+            RARCH_LOG("[slang]: Cannot inject %s, too many injections.\n", inj_key);
          }
       }
    }
@@ -2433,12 +2437,12 @@ end:
    config_file_free(root_conf);
 
    
-   if (shader->num_parameters) {
+   /*if (shader->num_parameters) {
       for ( size_t i = 0; i < shader->num_parameters; i++) {
          RARCH_DBG("[Shaders]: KOKO Preset parameter dump:*%s=%f \n", 
          shader->parameters[i].id, shader->parameters[i].current);
       }
-   }
+   }*/
    
    return ret;
 }

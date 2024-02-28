@@ -38,6 +38,10 @@
 #define GFX_MAX_PARAMETERS 1024
 #endif
 
+#ifndef INJ_MAX_DEFINES
+#define INJ_MAX_DEFINES 1024
+#endif
+
 #ifndef GFX_MAX_FRAME_HISTORY
 #define GFX_MAX_FRAME_HISTORY 128
 #endif
@@ -200,7 +204,7 @@ struct video_shader_lut
 struct video_shader
 {
    struct video_shader_parameter parameters[GFX_MAX_PARAMETERS]; /* int alignment */
-   struct video_shader_define_injection define_injections[GFX_MAX_PARAMETERS]; /* int alignment */
+   struct video_shader_define_injection define_injections[INJ_MAX_DEFINES]; /* int alignment */
    unsigned last_free_define_injection_index;
    /* If < 0, no feedback pass is used. Otherwise,
     * the FBO after pass #N is passed a texture to next frame. */
