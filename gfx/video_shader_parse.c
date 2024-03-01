@@ -1228,14 +1228,11 @@ void injection_unlock_all_parameters(struct video_shader *shader)
  * @param shader
  * Shader passes handle.
  *
+ * Load injections and injections directives
+ * from the preset into the shader object.
  * 
- * 
- *                                                                                  KOKO FIXME WRITE DOC.
- *                                                                                  KOKO FIXME WRITE HEADER.
- *
  * @return true (1) if successful, otherwise false (0).
  **/
-
 bool video_shader_load_define_injections(
    config_file_t *shader_preset, struct video_shader *shader) {
    RARCH_LOG("[Injections] video_shader_get_define_injections parsing: %s\n", shader_preset->path);
