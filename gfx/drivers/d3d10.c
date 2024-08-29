@@ -2075,7 +2075,7 @@ static void d3d10_init_render_targets(d3d10_video_t* d3d10,
                break;
 
             case RARCH_SCALE_ORIGINAL:
-               height = pass->fbo.scale_x;
+               width = pass->fbo.scale_x;
                break;
 
             default:

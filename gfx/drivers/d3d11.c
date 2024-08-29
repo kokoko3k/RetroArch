@@ -2699,7 +2699,7 @@ static void d3d11_init_render_targets(d3d11_video_t* d3d11, unsigned width, unsi
                break;
 
             case RARCH_SCALE_ORIGINAL:
-               height = pass->fbo.scale_x;
+               width = pass->fbo.scale_x;
                break;
 
             default:
