@@ -887,6 +887,66 @@ static void test_hidden_playlists(void)
    companion_core_free(c);
 }
 
+/* Hide / unhide, and New / Delete: the listing is the same for every
+ * backend, so the core filters it rather than each toolkit hiding rows
+ * of its own. */
+static void test_hidden_new_delete(void)
+{
+   companion_core_t *c = make_core();
+   char gen[512], out[PATH_MAX_LENGTH], gen_name[128];
+   size_t n0;
+   companion_core_refresh_playlists(c);
+   n0 = companion_core_playlist_count(c);
+   /* the last row's own path and name: earlier tests may have renamed it */
+   strlcpy(gen, companion_core_playlist_path(c, n0 - 1), sizeof(gen));
+   strlcpy(gen_name, companion_core_playlist_name(c, n0 - 1), sizeof(gen_name));
+   CHECK(n0 == 4, "4 rows to start (got %u)", (unsigned)n0);
+   CHECK(companion_core_hidden_count(c) == 0, "none hidden");
+
+   companion_core_playlist_set_hidden(c, gen, true);
+   CHECK(companion_core_playlist_is_hidden(c, gen), "marked hidden");
+   CHECK(companion_core_playlist_count(c) == n0 - 1, "listing drops it (%u)", (unsigned)companion_core_playlist_count(c));
+   CHECK(companion_core_playlist_name(c, 3) == NULL
+         || !string_is_equal(companion_core_playlist_name(c, 3), gen_name), "row 3 is no longer it");
+   CHECK(companion_core_hidden_count(c) == 1, "one hidden");
+   CHECK(string_is_equal(companion_core_hidden_name(c, 0), gen_name), "hidden name (got %s)", companion_core_hidden_name(c, 0));
+   CHECK(string_is_equal(companion_core_hidden_path(c, 0), gen), "hidden path");
+
+   companion_core_playlist_set_hidden(c, gen, false);
+   CHECK(companion_core_playlist_count(c) == n0, "unhide restores the row");
+   CHECK(string_is_equal(companion_core_playlist_name(c, 3), gen_name), "and in its sorted place (got %s)", companion_core_playlist_name(c, 3));
+   CHECK(companion_core_hidden_count(c) == 0, "none hidden again");
+
+   /* a special can be hidden too (Qt hides any row) */
+   {
+      const char *hist = companion_core_playlist_path(c, 1);
+      companion_core_playlist_set_hidden(c, hist, true);
+      CHECK(companion_core_playlist_count(c) == n0 - 1, "special hidden too");
+      CHECK(companion_core_hidden_count(c) == 1, "and listed as hidden");
+      companion_core_playlist_set_hidden(c, hist, false);
+   }
+
+   /* New / Delete */
+   CHECK(companion_core_playlist_new(c, "My Games", out, sizeof(out)), "new playlist");
+   CHECK(string_ends_with(out, "playlists/My Games.lpl") && path_is_valid(out), "created at %s", out);
+   CHECK(companion_core_playlist_count(c) == n0 + 1, "listing has it (%u)", (unsigned)companion_core_playlist_count(c));
+   CHECK(!companion_core_playlist_new(c, "My Games", NULL, 0), "not over an existing one");
+   CHECK(!companion_core_playlist_new(c, "a/b", NULL, 0), "no path separators");
+   /* it parses as an empty playlist */
+   CHECK(companion_core_select_playlist_path(c, out) && iterate_until_loaded(c), "the new playlist parses");
+   CHECK(companion_core_entry_count(c) == 0, "and is empty (%u)", (unsigned)companion_core_entry_count(c));
+   CHECK(companion_core_playlist_delete(c, out), "delete");
+   CHECK(!path_is_valid(out), "file gone");
+   CHECK(companion_core_playlist_count(c) == n0, "listing back to %u", (unsigned)n0);
+   {
+      char hist[512];
+      fixture(hist, sizeof(hist), "history.lpl");
+      CHECK(!companion_core_playlist_delete(c, hist), "a special (outside the directory) is not deleted");
+      CHECK(path_is_valid(hist), "and still there");
+   }
+   companion_core_free(c);
+}
+
 static void test_run_paths(void)
 {
    companion_core_t *c = make_core();
@@ -946,6 +1006,7 @@ int main(void)
    test_rename_add_install();
    test_options_and_shader_params();
    test_settings_table();
+   test_hidden_new_delete();
    test_hidden_playlists();
    test_run_paths();
    test_launch_options();

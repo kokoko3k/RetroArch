@@ -452,12 +452,25 @@ void companion_core_playlist_release(companion_core_t *core,
       playlist_t *playlist, bool owned, bool write);
 /* Hidden playlists: the comma-separated file-name list Qt's context
  * menu maintains (desktop_menu_hidden_playlists in retroarch.cfg).
- * @path is a playlist file path; only its file name is stored. The
- * listing itself is unaffected - a backend decides what to do with the
- * answer, as Qt's "Hide" does. */
+ * @path is a playlist file path; only its file name is stored.
+ * A hidden playlist is not in the listing at all: companion_core_
+ * playlist_count / _name / _path skip it, so every backend shows the
+ * same rows at the same indices. The hidden ones are enumerated
+ * separately, for the menu that puts them back. */
 bool companion_core_playlist_is_hidden(companion_core_t *core, const char *path);
 void companion_core_playlist_set_hidden(companion_core_t *core,
       const char *path, bool hidden);
+size_t      companion_core_hidden_count(companion_core_t *core);
+const char *companion_core_hidden_name(companion_core_t *core, size_t i);
+const char *companion_core_hidden_path(companion_core_t *core, size_t i);
+
+/* Qt's New Playlist... / Delete Playlist...: an empty .lpl in the
+ * playlists directory (refused if one by that name is there), and
+ * deleting a file from that directory (specials refused). Both refresh
+ * the listing. */
+bool companion_core_playlist_new(companion_core_t *core, const char *name,
+      char *out_path, size_t len);
+bool companion_core_playlist_delete(companion_core_t *core, const char *path);
 
 /* Rename playlist file @path to @new_name (no directory, no extension)
  * within the playlists directory, as Qt's rename does: special

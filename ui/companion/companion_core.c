@@ -1189,16 +1189,27 @@ static size_t companion_core_special_count(companion_core_t *core)
 /* Public index 0 is "All Playlists"; specials and files follow. */
 #define COMPANION_ALL_SLOT 1
 
-static bool companion_core_playlist_map(companion_core_t *core, size_t idx,
-      size_t *out, bool *is_special)
+/* Hidden rows are not in the listing at all - count, name and path all
+ * run through this map, so every backend sees the same list and the
+ * same indices (Qt hid rows in its own widget, which the natives have
+ * no equivalent of). @hidden_only walks the hidden ones instead, for
+ * the "Hidden Playlists" menu that puts them back. */
+static bool companion_core_playlist_map_ex(companion_core_t *core, size_t idx,
+      size_t *out, bool *is_special, bool hidden_only)
 {
    size_t i, seen = 0;
-   if (idx < COMPANION_ALL_SLOT)
-      return false; /* callers handle the All slot before mapping */
-   idx -= COMPANION_ALL_SLOT;
+   if (!hidden_only)
+   {
+      if (idx < COMPANION_ALL_SLOT)
+         return false; /* callers handle the All slot before mapping */
+      idx -= COMPANION_ALL_SLOT;
+   }
    for (i = 0; i < 5; i++)
    {
-      if (!companion_core_special_path(core, i))
+      const char *p = companion_core_special_path(core, i);
+      if (!p)
+         continue;
+      if (companion_core_playlist_is_hidden(core, p) != hidden_only)
          continue;
       if (seen == idx)
       {
@@ -1209,23 +1220,42 @@ static bool companion_core_playlist_map(companion_core_t *core, size_t idx,
       seen++;
    }
    idx -= seen;
-   if (core->playlist_files && idx < core->playlist_files->size)
+   if (core->playlist_files)
    {
-      *is_special = false;
-      *out        = idx;
-      return true;
+      seen = 0;
+      for (i = 0; i < core->playlist_files->size; i++)
+      {
+         if (companion_core_playlist_is_hidden(core,
+                  core->playlist_files->elems[i].data) != hidden_only)
+            continue;
+         if (seen == idx)
+         {
+            *is_special = false;
+            *out        = i;
+            return true;
+         }
+         seen++;
+      }
    }
    return false;
 }
 
+static bool companion_core_playlist_map(companion_core_t *core, size_t idx,
+      size_t *out, bool *is_special)
+{
+   return companion_core_playlist_map_ex(core, idx, out, is_special, false);
+}
+
 size_t companion_core_playlist_count(companion_core_t *core)
 {
-   size_t n;
+   size_t i, r, n = COMPANION_ALL_SLOT;
+   bool special;
    if (!core)
       return 0;
-   n = COMPANION_ALL_SLOT + companion_core_special_count(core);
-   if (core->playlist_files)
-      n += core->playlist_files->size;
+   /* the visible rows, counted through the same map that names them */
+   for (i = COMPANION_ALL_SLOT;
+         companion_core_playlist_map(core, i, &r, &special); i++)
+      n++;
    return n;
 }
 
@@ -1257,6 +1287,99 @@ const char *companion_core_playlist_path(companion_core_t *core, size_t i)
    if (special)
       return companion_core_special_path(core, r);
    return core->playlist_files->elems[r].data;
+}
+
+/* --- Hidden playlists, new and delete ---------------------------------- */
+
+size_t companion_core_hidden_count(companion_core_t *core)
+{
+   size_t i, r, n = 0;
+   bool special;
+   if (!core)
+      return 0;
+   for (i = 0; companion_core_playlist_map_ex(core, i, &r, &special, true); i++)
+      n++;
+   return n;
+}
+
+const char *companion_core_hidden_name(companion_core_t *core, size_t i)
+{
+   size_t r;
+   bool special;
+   if (!core || !companion_core_playlist_map_ex(core, i, &r, &special, true))
+      return NULL;
+   if (special)
+      return msg_hash_to_str(companion_core_special_label(r));
+   return core->playlist_names ? core->playlist_names[r] : NULL;
+}
+
+const char *companion_core_hidden_path(companion_core_t *core, size_t i)
+{
+   size_t r;
+   bool special;
+   if (!core || !companion_core_playlist_map_ex(core, i, &r, &special, true))
+      return NULL;
+   if (special)
+      return companion_core_special_path(core, r);
+   return core->playlist_files->elems[r].data;
+}
+
+bool companion_core_playlist_new(companion_core_t *core, const char *name,
+      char *out_path, size_t len)
+{
+   settings_t *settings = config_get_ptr();
+   char path[PATH_MAX_LENGTH];
+   RFILE *f;
+   size_t l;
+   if (!core || string_is_empty(name)
+         || strchr(name, '/') || strchr(name, '\\'))
+      return false;
+   l  = strlcpy(path, settings->paths.directory_playlist, sizeof(path));
+   if (!l)
+      return false;
+   fill_pathname_slash(path, sizeof(path));
+   l  = strlen(path);
+   l += strlcpy(path + l, name, sizeof(path) - l);
+   if (!string_is_equal_case_insensitive(path_get_extension(path), "lpl"))
+      strlcpy(path + l, ".lpl", sizeof(path) - l);
+   if (path_is_valid(path))
+      return false;                 /* one by that name exists */
+   /* an empty playlist file, in the format playlist.c reads back */
+   if (!(f = filestream_open(path, RETRO_VFS_FILE_ACCESS_WRITE,
+               RETRO_VFS_FILE_ACCESS_HINT_NONE)))
+      return false;
+   filestream_printf(f,
+         "{\n  \"version\": \"1.5\",\n  \"default_core_path\": \"\",\n"
+         "  \"default_core_name\": \"\",\n  \"label_display_mode\": 0,\n"
+         "  \"right_thumbnail_mode\": 0,\n  \"left_thumbnail_mode\": 0,\n"
+         "  \"sort_mode\": 0,\n  \"items\": [\n  ]\n}\n");
+   filestream_close(f);
+   if (out_path)
+      strlcpy(out_path, path, len);
+   companion_core_refresh_playlists(core);
+   return true;
+}
+
+bool companion_core_playlist_delete(companion_core_t *core, const char *path)
+{
+   char dir[PATH_MAX_LENGTH], dir_playlist[PATH_MAX_LENGTH];
+   if (!core || string_is_empty(path))
+      return false;
+   if (string_is_equal(path, COMPANION_ALL_PLAYLISTS_TOKEN))
+      return false;
+   /* only files in the playlists directory, as Qt's delete does */
+   strlcpy(dir, path, sizeof(dir));
+   path_basedir(dir);
+   strlcpy(dir_playlist, config_get_ptr()->paths.directory_playlist,
+         sizeof(dir_playlist));
+   fill_pathname_slash(dir_playlist, sizeof(dir_playlist));
+   if (!string_is_equal_case_insensitive(dir, dir_playlist))
+      return false;
+   if (!path_is_valid(path) || filestream_delete(path) != 0)
+      return false;
+   companion_core_playlist_set_hidden(core, path, false); /* forget it */
+   companion_core_refresh_playlists(core);
+   return true;
 }
 
 /* --- Selected playlist ----------------------------------------------- */

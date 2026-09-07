@@ -3002,8 +3002,33 @@ static void cw_context_menu(ui_companion_win32_wimp_t *w, HWND from,
          AppendMenuA(menu, MF_POPUP, (UINT_PTR_COMPAT)assoc,
                "&Associate Core");
       }
+      AppendMenuA(menu, MF_STRING, IDM_CW_NEW_PLAYLIST,
+            msg_hash_to_str(MENU_ENUM_LABEL_VALUE_QT_NEW_PLAYLIST));
       AppendMenuA(menu, MF_STRING, IDM_CW_RENAME_PLAYLIST,
             msg_hash_to_str(MENU_ENUM_LABEL_VALUE_QT_RENAME_PLAYLIST));
+      AppendMenuA(menu, MF_STRING, IDM_CW_DELETE_PLAYLIST,
+            msg_hash_to_str(MENU_ENUM_LABEL_VALUE_QT_DELETE_PLAYLIST));
+      AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
+      AppendMenuA(menu, MF_STRING, IDM_CW_HIDE_PLAYLIST,
+            msg_hash_to_str(MENU_ENUM_LABEL_VALUE_QT_HIDE));
+      /* Qt's "Hidden Playlists": each entry puts itself back. */
+      {
+         size_t hi, hn = companion_core_hidden_count(w->core);
+         HMENU hidden  = CreatePopupMenu();
+         if (hn > (size_t)(IDM_CW_UNHIDE_LAST - IDM_CW_UNHIDE_FIRST + 1))
+            hn = (size_t)(IDM_CW_UNHIDE_LAST - IDM_CW_UNHIDE_FIRST + 1);
+         for (hi = 0; hi < hn; hi++)
+         {
+            const char *nm = companion_core_hidden_name(w->core, hi);
+            AppendMenuA(hidden, MF_STRING, (UINT)(IDM_CW_UNHIDE_FIRST + hi),
+                  nm ? nm : "");
+         }
+         if (!hn)
+            AppendMenuA(hidden, MF_STRING | MF_GRAYED, 0, "(none)");
+         AppendMenuA(menu, MF_POPUP, (UINT_PTR_COMPAT)hidden,
+               msg_hash_to_str(MENU_ENUM_LABEL_VALUE_QT_HIDDEN_PLAYLISTS));
+      }
+      AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
       AppendMenuA(menu, MF_STRING, IDM_CW_REFRESH, "Re&fresh Playlists");
    }
 
@@ -3128,6 +3153,20 @@ static LRESULT CALLBACK cw_wndproc(HWND hwnd, UINT msg,
       case WM_COMMAND:
          if (!w)
             break;
+         if (LOWORD(wparam) >= IDM_CW_UNHIDE_FIRST
+               && LOWORD(wparam) <= IDM_CW_UNHIDE_LAST)
+         {
+            /* the Hidden Playlists submenu: put that one back. A range,
+             * so it cannot be a case label. */
+            const char *hp = companion_core_hidden_path(w->core,
+                  (size_t)(LOWORD(wparam) - IDM_CW_UNHIDE_FIRST));
+            if (hp)
+            {
+               companion_core_playlist_set_hidden(w->core, hp, false);
+               companion_core_refresh_playlists(w->core);
+            }
+            return 0;
+         }
          switch (LOWORD(wparam))
          {
             case IDC_CW_BR_UP:
@@ -3249,6 +3288,68 @@ static LRESULT CALLBACK cw_wndproc(HWND hwnd, UINT msg,
                return 0;
             case IDM_CW_ASSOC_DETECT:
                cw_associate_core(w, IDM_CW_ASSOC_DETECT);
+               return 0;
+            case IDM_CW_HIDE_PLAYLIST:
+               {
+                  LRESULT sel = SendMessageA(w->playlists, LVM_GETNEXTITEM,
+                        (WPARAM)-1, MAKELPARAM(LVNI_SELECTED, 0));
+                  const char *p = (sel >= 0 && !w->browse_mode)
+                     ? companion_core_playlist_path(w->core, (size_t)sel) : NULL;
+                  if (p && !string_is_equal(p, COMPANION_ALL_PLAYLISTS_TOKEN))
+                  {
+                     companion_core_playlist_set_hidden(w->core, p, true);
+                     companion_core_refresh_playlists(w->core);
+                  }
+               }
+               return 0;
+            case IDM_CW_NEW_PLAYLIST:
+               {
+                  /* A free default name, then the label is opened for
+                   * editing - the in-place rename the menu already has,
+                   * so there is no dialog to write. */
+                  char name[64], out[PATH_MAX_LENGTH];
+                  unsigned k;
+                  for (k = 0; k < 100; k++)
+                  {
+                     if (k)
+                        snprintf(name, sizeof(name), "New Playlist %u", k + 1);
+                     else
+                        strlcpy(name, "New Playlist", sizeof(name));
+                     if (companion_core_playlist_new(w->core, name, out, sizeof(out)))
+                        break;
+                  }
+                  if (k < 100)
+                  {
+                     size_t i, n = companion_core_playlist_count(w->core);
+                     for (i = 0; i < n; i++)
+                        if (string_is_equal(companion_core_playlist_path(w->core, i), out))
+                        {
+                           SetFocus(w->playlists);
+                           ListView_SetItemState(w->playlists, (int)i,
+                                 LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+                           SendMessageA(w->playlists, LVM_EDITLABELA, (WPARAM)i, 0);
+                           break;
+                        }
+                  }
+               }
+               return 0;
+            case IDM_CW_DELETE_PLAYLIST:
+               {
+                  LRESULT sel = SendMessageA(w->playlists, LVM_GETNEXTITEM,
+                        (WPARAM)-1, MAKELPARAM(LVNI_SELECTED, 0));
+                  const char *p = (sel >= 0 && !w->browse_mode)
+                     ? companion_core_playlist_path(w->core, (size_t)sel) : NULL;
+                  char msg[PATH_MAX_LENGTH + 64];
+                  if (!p || string_is_equal(p, COMPANION_ALL_PLAYLISTS_TOKEN))
+                     return 0;
+                  snprintf(msg, sizeof(msg), "Delete \"%s\"?",
+                        companion_core_playlist_name(w->core, (size_t)sel));
+                  if (MessageBoxA(w->hwnd, msg,
+                           msg_hash_to_str(MENU_ENUM_LABEL_VALUE_QT_DELETE_PLAYLIST),
+                           MB_YESNO | MB_ICONQUESTION) == IDYES
+                        && !companion_core_playlist_delete(w->core, p))
+                     cw_status_set(w, "Could not delete the playlist");
+               }
                return 0;
             case IDM_CW_RENAME_PLAYLIST:
                {

@@ -165,6 +165,7 @@ typedef struct ui_companion_cocoa_wimp ui_companion_cocoa_wimp_t;
    NSMenuItem *menuItem;
    NSMenu *entriesMenu;    /* right-click on an entry   */
    NSMenu *playlistsMenu;  /* right-click on a playlist */
+   NSMenu *hiddenMenu;     /* its "Hidden Playlists" submenu, filled on open */
    NSMenu *assocMenu;      /* "Associate Core" submenu, rebuilt on open */
    NSScrollView *logScroll; /* log pane, hidden until Companion > Log */
    NSTextView *logView;
@@ -283,6 +284,13 @@ typedef struct ui_companion_cocoa_wimp ui_companion_cocoa_wimp_t;
 - (void)shaderApply:(id)sender;
 - (void)shaderReset:(id)sender;
 - (void)renamePlaylist:(id)sender;
+- (void)rebuildHiddenMenu;
+- (void)hidePlaylist:(id)sender;
+- (void)unhidePlaylist:(id)sender;
+- (void)newPlaylist:(id)sender;
+- (BOOL)createPlaylistNamed:(const char*)name;
+- (void)deletePlaylist:(id)sender;
+- (BOOL)deletePlaylistAtPath:(const char*)path;
 - (BOOL)renamePlaylistAtRow:(NSInteger)row to:(const char*)newName;
 - (size_t)addPaths:(NSArray*)paths;
 - (void)addFiles:(id)sender;
@@ -711,6 +719,7 @@ static const companion_callbacks_t cc_callbacks = {
 
 - (void)reloadPlaylists
 {
+   [self rebuildHiddenMenu];   /* the hidden set changed with the listing */
    if (wimp && playlistIcons)
    {
       size_t i, n = companion_core_playlist_count(wimp->core);
@@ -1451,9 +1460,26 @@ static void cc_thumb_done(void *ud, const char *path, int w, int h,
    [assocMenu setDelegate:self];
    item = [playlistsMenu addItemWithTitle:@"Associate Core" action:NULL keyEquivalent:@""];
    [item setSubmenu:assocMenu];
+   item = [playlistsMenu addItemWithTitle:BOXSTRING(msg_hash_to_str(MENU_ENUM_LABEL_VALUE_QT_NEW_PLAYLIST))
+      action:@selector(newPlaylist:) keyEquivalent:@""];
+   [item setTarget:self];
    item = [playlistsMenu addItemWithTitle:BOXSTRING(msg_hash_to_str(MENU_ENUM_LABEL_VALUE_QT_RENAME_PLAYLIST))
       action:@selector(renamePlaylist:) keyEquivalent:@""];
    [item setTarget:self];
+   item = [playlistsMenu addItemWithTitle:BOXSTRING(msg_hash_to_str(MENU_ENUM_LABEL_VALUE_QT_DELETE_PLAYLIST))
+      action:@selector(deletePlaylist:) keyEquivalent:@""];
+   [item setTarget:self];
+   [playlistsMenu addItem:[NSMenuItem separatorItem]];
+   item = [playlistsMenu addItemWithTitle:BOXSTRING(msg_hash_to_str(MENU_ENUM_LABEL_VALUE_QT_HIDE))
+      action:@selector(hidePlaylist:) keyEquivalent:@""];
+   [item setTarget:self];
+   /* Qt's "Hidden Playlists": filled when the menu opens (the delegate
+    * below), each entry putting that playlist back. */
+   hiddenMenu = [[NSMenu alloc] initWithTitle:@""];
+   item = [playlistsMenu addItemWithTitle:BOXSTRING(msg_hash_to_str(MENU_ENUM_LABEL_VALUE_QT_HIDDEN_PLAYLISTS))
+      action:NULL keyEquivalent:@""];
+   [item setSubmenu:hiddenMenu];
+   [playlistsMenu addItem:[NSMenuItem separatorItem]];
    item = [playlistsMenu addItemWithTitle:@"Refresh Playlists" action:@selector(refreshPlaylists:) keyEquivalent:@""];
    [item setTarget:self];
    [playlists setMenu:playlistsMenu];
@@ -1589,7 +1615,10 @@ static void cc_thumb_done(void *ud, const char *path, int w, int h,
    size_t i, n;
    NSMenuItem *item;
 
-   if (menu != assocMenu || !wimp)
+   if (!wimp)
+      return;
+
+   if (menu != assocMenu)
       return;
 
    while ([menu numberOfItems] > 0)
@@ -1690,6 +1719,7 @@ static void cc_thumb_done(void *ud, const char *path, int w, int h,
    if (assocMenu)
       [assocMenu setDelegate:nil];
    RELEASE(assocMenu);
+   RELEASE(hiddenMenu);
    RELEASE(playlistsMenu);
    RELEASE(entriesMenu);
    if (window)
@@ -2735,6 +2765,119 @@ static void cc_thumb_done(void *ud, const char *path, int w, int h,
 
 /* Rename the selected playlist: a sheet with a text field; the core
  * moves the file and refreshes the list (special playlists refused). */
+/* Hide the selected playlist: the core drops it from the listing. */
+/* Qt's "Hidden Playlists" submenu. The hidden set only changes when the
+ * listing does, so it is rebuilt there rather than from a menu
+ * delegate (which is also one less thing to go wrong while the menu is
+ * being tracked). */
+- (void)rebuildHiddenMenu
+{
+   size_t i, n;
+   if (!hiddenMenu || !wimp)
+      return;
+   while ([hiddenMenu numberOfItems] > 0)
+      [hiddenMenu removeItemAtIndex:0];
+   n = companion_core_hidden_count(wimp->core);
+   for (i = 0; i < n; i++)
+   {
+      const char *nm = companion_core_hidden_name(wimp->core, i);
+      NSMenuItem *it = [hiddenMenu addItemWithTitle:BOXSTRING(nm ? nm : "")
+         action:@selector(unhidePlaylist:) keyEquivalent:@""];
+      [it setTarget:self];
+      [it setTag:(NSInteger)i];
+   }
+   if (!n)
+      [[hiddenMenu addItemWithTitle:@"(none)" action:NULL keyEquivalent:@""] setEnabled:NO];
+}
+
+- (void)hidePlaylist:(id)sender
+{
+   NSInteger row = [playlists selectedRow];
+   const char *p;
+   if (!wimp || browseMode || row < 0)
+      return;
+   p = companion_core_playlist_path(wimp->core, (size_t)row);
+   if (!p || string_is_equal(p, COMPANION_ALL_PLAYLISTS_TOKEN))
+      return;
+   companion_core_playlist_set_hidden(wimp->core, p, true);
+   companion_core_refresh_playlists(wimp->core);
+}
+
+
+- (void)unhidePlaylist:(id)sender
+{
+   const char *p;
+   if (!wimp)
+      return;
+   p = companion_core_hidden_path(wimp->core, (size_t)[sender tag]);
+   if (!p)
+      return;
+   companion_core_playlist_set_hidden(wimp->core, p, false);
+   companion_core_refresh_playlists(wimp->core);
+}
+
+/* Qt's New Playlist...: a sheet for the name, then an empty .lpl. */
+- (void)newPlaylist:(id)sender
+{
+   NSAlert *a = [[[NSAlert alloc] init] autorelease_compat];
+   NSTextField *field = [[[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 300, 24)] autorelease_compat];
+   if (!wimp || browseMode)
+      return;
+   [a setMessageText:BOXSTRING(msg_hash_to_str(MENU_ENUM_LABEL_VALUE_QT_NEW_PLAYLIST))];
+   [a addButtonWithTitle:@"OK"];
+   [a addButtonWithTitle:@"Cancel"];
+   [field setStringValue:@"New Playlist"];
+   if ([a respondsToSelector:@selector(setAccessoryView:)])
+      [a performSelector:@selector(setAccessoryView:) withObject:field];
+   if ([a runModal] != NSAlertFirstButtonReturn)
+      return;
+   [self createPlaylistNamed:[[field stringValue] UTF8String]];
+}
+
+/* The creation itself (the harness calls this without the sheet). */
+- (BOOL)createPlaylistNamed:(const char*)name
+{
+   if (!wimp || !name || !*name)
+      return NO;
+   if (!companion_core_playlist_new(wimp->core, name, NULL, 0))
+   {
+      [self setStatus:"Could not create the playlist"];
+      return NO;
+   }
+   return YES;
+}
+
+/* Qt's Delete Playlist...: confirmed, then the file goes. */
+- (void)deletePlaylist:(id)sender
+{
+   NSInteger row = [playlists selectedRow];
+   const char *p;
+   NSAlert *a;
+   if (!wimp || browseMode || row < 0)
+      return;
+   p = companion_core_playlist_path(wimp->core, (size_t)row);
+   if (!p || string_is_equal(p, COMPANION_ALL_PLAYLISTS_TOKEN))
+      return;
+   a = [[[NSAlert alloc] init] autorelease_compat];
+   [a setMessageText:[NSString stringWithFormat:@"Delete \"%s\"?",
+      companion_core_playlist_name(wimp->core, (size_t)row)]];
+   [a addButtonWithTitle:@"Delete"];
+   [a addButtonWithTitle:@"Cancel"];
+   if ([a runModal] != NSAlertFirstButtonReturn)
+      return;
+   [self deletePlaylistAtPath:p];
+}
+
+- (BOOL)deletePlaylistAtPath:(const char*)path
+{
+   if (!wimp || !companion_core_playlist_delete(wimp->core, path))
+   {
+      [self setStatus:"Could not delete the playlist"];
+      return NO;
+   }
+   return YES;
+}
+
 - (void)renamePlaylist:(id)sender
 {
    NSInteger row = [playlists selectedRow];

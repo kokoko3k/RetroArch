@@ -85,6 +85,11 @@ FEATURES = {
     'rename playlist':    'companion_core_playlist_rename',
     'add files':          'companion_core_playlist_add_files',
     'thumbnail drop':     'companion_core_thumbnail_install',
+    # Qt's playlist context menu: hide / unhide, new, delete
+    'hide playlist':      'companion_core_playlist_set_hidden',
+    'hidden playlists':   'companion_core_hidden_count',
+    'new playlist':       'companion_core_playlist_new',
+    'delete playlist':    'companion_core_playlist_delete',
     'hidden playlists':   'companion_core_playlist_is_hidden',
     # Qt's View > Core Options, View > Shader Parameters, View > Options
     'core options':       'companion_core_option_count',
@@ -106,6 +111,13 @@ WAIVERS = {
     # source), not a file path, and saves through QImage; the core call
     # takes a path.
     ('qt', 'thumbnail drop'): 'Qt: QImage drop saved via changeThumbnail',
+    # Qt hides rows in its own list widget (it asks the core whether a
+    # playlist is hidden, and keeps the row) rather than reading the
+    # filtered listing; new / delete are its own dialogs over the same
+    # files.
+    ('qt', 'hidden playlists'): 'Qt: hides rows in its list widget, is_hidden per row',
+    ('qt', 'new playlist'):     'Qt: PlaylistEntryDialog writes the file itself',
+    ('qt', 'delete playlist'):  'Qt: confirm dialog + QFile::remove',
     # The hidden-playlist list is in the core (Qt reads and writes it
     # there), but only Qt has the UI for it - a context-menu Hide and a
     # submenu of hidden playlists to bring back. The natives need a row

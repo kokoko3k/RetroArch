@@ -710,6 +710,74 @@ int main(int argc, char **argv)
       [ow orderOut:nil];
    }
 
+   /* --- hide / unhide, new / delete playlists --- */
+   {
+      NSInteger before = [leftTable numberOfRows];
+      SEL s;
+      const char *p3;
+      char keep[512];
+      [tabs selectTabViewItemAtIndex:0];
+      pump(data, 200);
+      p3 = companion_core_playlist_path(peek->core, 3);
+      strlcpy(keep, p3 ? p3 : "", sizeof(keep));
+      [leftTable selectRowIndexes:[NSIndexSet indexSetWithIndex:3] byExtendingSelection:NO];
+      s = NSSelectorFromString(@"hidePlaylist:");
+      CHECK([ctrl respondsToSelector:s], "Hide implemented");
+      [ctrl performSelector:s withObject:nil];
+      pump(data, 300);
+      CHECK([leftTable numberOfRows] == before - 1, "hidden: the row is gone (%ld -> %ld)", (long)before, (long)[leftTable numberOfRows]);
+      CHECK(companion_core_hidden_count(peek->core) == 1, "one hidden");
+      /* the submenu builds and puts it back */
+      {
+         NSMenu *hm = [ctrl valueForKey:@"hiddenMenu"];
+         CHECK(hm != nil, "hidden submenu exists");
+         CHECK([hm numberOfItems] == 1, "one entry in it, rebuilt with the listing (%ld)", (long)[hm numberOfItems]);
+         if ([hm numberOfItems] == 1)
+         {
+            NSMenuItem *it = [hm itemAtIndex:0];
+            CHECK([[it title] length] > 0, "entry has a name (%s)", [[it title] UTF8String]);
+            [ctrl performSelector:NSSelectorFromString(@"unhidePlaylist:") withObject:it];
+            pump(data, 300);
+         }
+      }
+      CHECK([leftTable numberOfRows] == before, "unhidden: the row is back (%ld)", (long)[leftTable numberOfRows]);
+      CHECK(string_is_equal(companion_core_playlist_path(peek->core, 3), keep), "and in its place");
+
+      s = NSSelectorFromString(@"createPlaylistNamed:");
+      CHECK([ctrl respondsToSelector:s], "New Playlist implemented");
+      {
+         NSInvocation *inv = [NSInvocation invocationWithMethodSignature:[ctrl methodSignatureForSelector:s]];
+         const char *nm = "Harness List";
+         BOOL ok = NO;
+         [inv setSelector:s]; [inv setTarget:ctrl];
+         [inv setArgument:&nm atIndex:2];
+         [inv invoke]; [inv getReturnValue:&ok];
+         CHECK(ok, "created");
+      }
+      pump(data, 300);
+      CHECK([leftTable numberOfRows] == before + 1, "listed (%ld)", (long)[leftTable numberOfRows]);
+      {
+         NSInteger r, found = -1;
+         for (r = 0; r < [leftTable numberOfRows]; r++)
+            if (string_is_equal(companion_core_playlist_name(peek->core, (size_t)r), "Harness List"))
+               found = r;
+         CHECK(found >= 0, "found at row %ld", (long)found);
+         if (found >= 0)
+         {
+            SEL sd = NSSelectorFromString(@"deletePlaylistAtPath:");
+            NSInvocation *inv = [NSInvocation invocationWithMethodSignature:[ctrl methodSignatureForSelector:sd]];
+            const char *pp = companion_core_playlist_path(peek->core, (size_t)found);
+            BOOL ok = NO;
+            [inv setSelector:sd]; [inv setTarget:ctrl];
+            [inv setArgument:&pp atIndex:2];
+            [inv invoke]; [inv getReturnValue:&ok];
+            CHECK(ok, "deleted");
+            pump(data, 300);
+            CHECK([leftTable numberOfRows] == before, "listing back to %ld", (long)before);
+         }
+      }
+   }
+
    /* --- closing hands the keyboard back --- */
    {
       NSWindow *host = [(id)apple_platform hostWindow];

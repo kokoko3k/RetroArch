@@ -286,6 +286,41 @@ int main(void)
       test_runloop.core_options = NULL;
    }
 
+   /* --- hide / unhide, new / delete playlists (the context menu) --- */
+   {
+      int before = (int)SendMessageA(playlists, LVM_GETITEMCOUNT, 0, 0);
+      char keep[512];
+      strlcpy(keep, companion_core_playlist_path(peek->core, 3), sizeof(keep));
+      ListView_SetItemState(playlists, 3, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+      send_command(hwnd, IDM_CW_HIDE_PLAYLIST);
+      pump(data, 300);
+      CHECK((int)SendMessageA(playlists, LVM_GETITEMCOUNT, 0, 0) == before - 1, "Hide drops the row (%d -> %d)", before, (int)SendMessageA(playlists, LVM_GETITEMCOUNT, 0, 0));
+      CHECK(companion_core_hidden_count(peek->core) == 1, "one hidden");
+      /* the Hidden Playlists submenu sends IDM_CW_UNHIDE_FIRST + index */
+      send_command(hwnd, IDM_CW_UNHIDE_FIRST);
+      pump(data, 300);
+      CHECK((int)SendMessageA(playlists, LVM_GETITEMCOUNT, 0, 0) == before, "unhidden: the row is back");
+      CHECK(string_is_equal(companion_core_playlist_path(peek->core, 3), keep), "and in its place");
+      /* New Playlist: created and selected for an in-place rename */
+      send_command(hwnd, IDM_CW_NEW_PLAYLIST);
+      pump(data, 300);
+      CHECK((int)SendMessageA(playlists, LVM_GETITEMCOUNT, 0, 0) == before + 1, "New Playlist adds a row (%d)", (int)SendMessageA(playlists, LVM_GETITEMCOUNT, 0, 0));
+      {
+         size_t i, n = companion_core_playlist_count(peek->core);
+         const char *np = NULL;
+         for (i = 0; i < n; i++)
+            if (strstr(companion_core_playlist_name(peek->core, i), "New Playlist"))
+               np = companion_core_playlist_path(peek->core, i);
+         CHECK(np != NULL, "the new playlist is listed");
+         if (np)
+         {
+            CHECK(companion_core_playlist_delete(peek->core, np), "delete it again");
+            pump(data, 300);
+            CHECK((int)SendMessageA(playlists, LVM_GETITEMCOUNT, 0, 0) == before, "listing back to %d", before);
+         }
+      }
+   }
+
    /* close: the window hides */
    SendMessageA(hwnd, WM_CLOSE, 0, 0);
    pump(data, 200);
