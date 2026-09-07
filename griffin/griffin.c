@@ -1093,6 +1093,7 @@ DRIVERS
 #include "../gfx/gfx_animation.c"
 #include "../gfx/gfx_display.c"
 #include "../gfx/gfx_thumbnail.c"
+#include "../gfx/gfx_anim_preview.c"
 
 /* rflac is used by the audio mixer (HAVE_RFLAC) and by the CHD FLAC
  * decoder in libchdr (HAVE_CHD). Include its implementation once, ahead
@@ -1326,6 +1327,7 @@ UI
 ============================================================ */
 #if defined(_WIN32) && !defined(_XBOX) && !defined(__WINRT__)
 #include "../ui/drivers/ui_win32.c"
+#include "../ui/drivers/ui_win32_companion.c"
 #endif
 
 /*============================================================
@@ -1346,6 +1348,10 @@ RETROARCH
 #endif
 #include "../command.c"
 #include "../ui/ui_companion_driver.c"
+#ifdef HAVE_COMPANION_WIMP
+#include "../ui/companion/companion_core.c"
+#include "../ui/companion/companion_thumbs.c"
+#endif
 #include "../libretro-common/queues/task_queue.c"
 
 #include "../msg_hash.c"

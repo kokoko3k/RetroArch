@@ -326,6 +326,7 @@ OBJ += \
        gfx/gfx_display.o \
        gfx/gfx_animation.o \
        gfx/gfx_thumbnail.o \
+       gfx/gfx_anim_preview.o \
        configuration.o \
        $(LIBRETRO_COMM_DIR)/dynamic/dylib.o \
        cores/dynamic_dummy.o \
@@ -1460,8 +1461,21 @@ endif
 
 # Companion UI
 
+# Shared companion core (ui/companion/) is needed by every desktop
+# companion driver: Qt, native Win32, native Cocoa. Added once.
 ifneq ($(findstring Win32,$(OS)),)
-   OBJ += ui/drivers/ui_win32.o
+   OBJ += ui/drivers/ui_win32.o \
+          ui/drivers/ui_win32_companion.o
+   # comctl32: InitCommonControls / list-view / status bar used by the
+   # native Win32 companion (MSVC builds pull it in via #pragma comment).
+   LIBS += -lcomctl32 -lshell32 -lole32
+   HAVE_COMPANION_CORE = 1
+endif
+ifeq ($(HAVE_QT), 1)
+   HAVE_COMPANION_CORE = 1
+endif
+ifeq ($(HAVE_COMPANION_CORE), 1)
+   OBJ += ui/companion/companion_core.o ui/companion/companion_thumbs.o
 endif
 
 # Video
@@ -2738,7 +2752,14 @@ ifeq ($(HAVE_COCOA), 1)
    DEFINES += -DHAVE_MAIN -DTARGET_OS_OSX=1 -DHAVE_COCOA
    OBJ += input/drivers/cocoa_input.o \
           ui/drivers/ui_cocoa.o \
+          ui/drivers/ui_cocoa_companion.o \
           ui/drivers/cocoa/cocoa_common.o
+   # HAVE_COCOA_COMMON is only known here, after the companion-core
+   # block above ran; add the shared core if Qt/Win32 did not already.
+   ifneq ($(HAVE_COMPANION_CORE), 1)
+      OBJ += ui/companion/companion_core.o ui/companion/companion_thumbs.o
+      HAVE_COMPANION_CORE = 1
+   endif
    # RetroArchPlaylistManager uses Obj-C lightweight generics and
    # nullability macros (Xcode 7+, 2015).  It's fine on iOS/tvOS and
    # modern macOS (10.11+), but GCC 4.0 / old clang on pre-10.11

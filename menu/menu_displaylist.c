@@ -10455,7 +10455,7 @@ unsigned menu_displaylist_build_list(
       case DISPLAYLIST_USER_INTERFACE_SETTINGS_LIST:
          {
             bool kiosk_mode_enable   = settings->bools.kiosk_mode_enable;
-#if defined(HAVE_QT) || defined(HAVE_COCOA)
+#ifdef HAVE_COMPANION_WIMP
             bool desktop_menu_enable = settings->bools.desktop_menu_enable;
 #endif
             bool menu_screensaver_supported = ((menu_st->flags & MENU_ST_FLAG_SCREENSAVER_SUPPORTED) > 0);
@@ -10498,11 +10498,26 @@ unsigned menu_displaylist_build_list(
 #if !TARGET_OS_OSX
                {MENU_ENUM_LABEL_VIDEO_DISABLE_COMPOSITION,                             PARSE_ONLY_BOOL,   true},
 #endif
-#if defined(HAVE_QT) || defined(HAVE_COCOA)
+#ifdef HAVE_COMPANION_WIMP
                {MENU_ENUM_LABEL_UI_COMPANION_ENABLE,                                   PARSE_ONLY_BOOL,   true},
                {MENU_ENUM_LABEL_UI_COMPANION_START_ON_BOOT,                            PARSE_ONLY_BOOL,   true},
                {MENU_ENUM_LABEL_UI_COMPANION_TOGGLE,                                   PARSE_ONLY_BOOL,   false},
                {MENU_ENUM_LABEL_DESKTOP_MENU_ENABLE,                                   PARSE_ONLY_BOOL,   true},
+               /* Presentation settings shared by every desktop companion. */
+               {MENU_ENUM_LABEL_DESKTOP_MENU_VIEW_TYPE,                                PARSE_ONLY_UINT,   true},
+               {MENU_ENUM_LABEL_DESKTOP_MENU_THUMBNAIL_TYPE,                           PARSE_ONLY_UINT,   true},
+               {MENU_ENUM_LABEL_DESKTOP_MENU_SUGGEST_LOADED_CORE_FIRST,                PARSE_ONLY_BOOL,   true},
+               {MENU_ENUM_LABEL_DESKTOP_MENU_SAVE_LAST_TAB,                            PARSE_ONLY_BOOL,   true},
+               {MENU_ENUM_LABEL_DESKTOP_MENU_SAVE_GEOMETRY,                            PARSE_ONLY_BOOL,   true},
+               {MENU_ENUM_LABEL_DESKTOP_MENU_SHOW_WELCOME_SCREEN,                      PARSE_ONLY_BOOL,   true},
+               {MENU_ENUM_LABEL_DESKTOP_MENU_SCAN_FINISH_CONFIRM,                      PARSE_ONLY_BOOL,   true},
+               {MENU_ENUM_LABEL_DESKTOP_MENU_THUMBNAIL_CACHE_LIMIT,                    PARSE_ONLY_UINT,   true},
+               {MENU_ENUM_LABEL_DESKTOP_MENU_THUMBNAIL_MAX_SIZE,                       PARSE_ONLY_UINT,   true},
+               {MENU_ENUM_LABEL_DESKTOP_MENU_THUMBNAIL_QUALITY,                        PARSE_ONLY_UINT,   true},
+               {MENU_ENUM_LABEL_DESKTOP_MENU_ICON_VIEW_ZOOM,                           PARSE_ONLY_UINT,   true},
+               {MENU_ENUM_LABEL_DESKTOP_MENU_ALL_PLAYLISTS_LIST_MAX_COUNT,             PARSE_ONLY_UINT,   true},
+               {MENU_ENUM_LABEL_DESKTOP_MENU_ALL_PLAYLISTS_GRID_MAX_COUNT,             PARSE_ONLY_UINT,   true},
+               {MENU_ENUM_LABEL_DESKTOP_MENU_THEME,                                    PARSE_ONLY_UINT,   true},
 #endif
 #ifdef _3DS
                {MENU_ENUM_LABEL_VIDEO_3DS_DISPLAY_MODE,                                PARSE_ONLY_UINT,   true},
@@ -10547,7 +10562,7 @@ unsigned menu_displaylist_build_list(
                         && (menu_screensaver_animation != MENU_SCREENSAVER_BLANK);
                      break;
 #endif
-#if defined(HAVE_QT) || defined(HAVE_COCOA)
+#ifdef HAVE_COMPANION_WIMP
                   case MENU_ENUM_LABEL_UI_COMPANION_TOGGLE:
                      build_list[i].checked = desktop_menu_enable;
                      break;
@@ -12440,6 +12455,9 @@ unsigned menu_displaylist_build_list(
                {MENU_ENUM_LABEL_JOYPAD_DRIVER,         PARSE_ONLY_STRING_OPTIONS},
                {MENU_ENUM_LABEL_RECORD_DRIVER,         PARSE_ONLY_STRING_OPTIONS},
                {MENU_ENUM_LABEL_MIDI_DRIVER,           PARSE_ONLY_STRING_OPTIONS},
+#ifdef HAVE_COMPANION_WIMP
+               {MENU_ENUM_LABEL_UI_COMPANION_DRIVER,   PARSE_ONLY_STRING_OPTIONS},
+#endif
 #ifdef HAVE_BLUETOOTH
                {MENU_ENUM_LABEL_BLUETOOTH_DRIVER,      PARSE_ONLY_STRING_OPTIONS},
 #endif
@@ -16137,7 +16155,7 @@ static bool menu_displaylist_ctl_internal(
                      count++;
 #endif
 
-#ifdef HAVE_QT
+#ifdef HAVE_COMPANION_WIMP
                if (settings->bools.desktop_menu_enable)
                   if (MENU_DISPLAYLIST_PARSE_SETTINGS_ENUM(
                         info->list,
