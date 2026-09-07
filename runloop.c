@@ -4917,12 +4917,18 @@ void runloop_set_frame_limit(
       float fastforward_ratio)
 {
    if (fastforward_ratio < 0.1f)
-      runloop_state.frame_limit_minimum_time = 0;
+   {
+      runloop_state.frame_limit_minimum_time    = 0;
+      runloop_state.frame_limit_minimum_time_ns = 0;
+   }
    else
    {
       float fps = av_info->timing.fps;
       runloop_state.frame_limit_minimum_time = (fps > 0.0f)
          ? (retro_time_t)roundf(1000000.0f / (fps * fastforward_ratio))
+         : 0;
+      runloop_state.frame_limit_minimum_time_ns = (fps > 0.0f)
+         ? (int64_t)(1000000000.0 / ((double)fps * fastforward_ratio))
          : 0;
    }
 }
@@ -5308,6 +5314,7 @@ bool runloop_event_init_core(
 
    runloop_set_frame_limit(&video_st->av_info, fastforward_ratio);
    runloop_st->frame_limit_last_time    = cpu_features_get_time_usec();
+   runloop_st->frame_limit_anchor_ns    = (int64_t)runloop_st->frame_limit_last_time * 1000;
 
    /* Init runtime log and read current state slot */
    runloop_runtime_log_init(runloop_st);
@@ -5372,6 +5379,10 @@ void runloop_pause_checks(void)
             ((video_st->video_refresh_rate_original)
                ? video_st->video_refresh_rate_original
                : video_refresh_rate));
+      runloop_st->frame_limit_minimum_time_ns = runloop_content_frame_time_ns(
+            (video_st->video_refresh_rate_original)
+               ? video_st->video_refresh_rate_original
+               : video_refresh_rate);
    }
    else
    {
@@ -7918,6 +7929,7 @@ end:
 int runloop_iterate(void)
 {
    retro_time_t pace_limit_min;
+   int64_t      pace_limit_ns;
    input_driver_state_t         *input_st = input_state_get_ptr();
    audio_driver_state_t         *audio_st = audio_state_get_ptr();
    video_driver_state_t         *video_st = video_state_get_ptr();
@@ -8052,6 +8064,19 @@ int runloop_iterate(void)
                audio_buf_active, audio_buf_occupancy, audio_buf_underrun);
    }
 
+   /* A driver's request to be reinitialised - a device change or an
+    * unplug - is taken here, once a frame, on the main thread with no
+    * audio lock held: the reinit frees the state lock and joins the
+    * audio thread, so it cannot run from a flush or from that thread. */
+   if (audio_driver_take_reinit_request())
+   {
+      RARCH_LOG("[Audio] Driver reinit requested...\n");
+      command_event(CMD_EVENT_AUDIO_REINIT, NULL);
+#ifdef HAVE_MICROPHONE
+      command_event(CMD_EVENT_MICROPHONE_REINIT, NULL);
+#endif
+   }
+
    switch ((enum runloop_state_enum)runloop_check_state(
             input_st, audio_st, video_st,
             uico_st,
@@ -8061,6 +8086,7 @@ int runloop_iterate(void)
    {
       case RUNLOOP_STATE_QUIT:
          runloop_st->frame_limit_last_time = 0.0;
+         runloop_st->frame_limit_anchor_ns = 0;
          runloop_st->flags                &= ~RUNLOOP_FLAG_CORE_RUNNING;
          command_event(CMD_EVENT_QUIT, NULL);
          return -1;
@@ -8161,20 +8187,27 @@ int runloop_iterate(void)
             /* Make sure no stale frame_limit_minimum_time from a prior
              * iteration (e.g. just before menu_pause_libretro was toggled
              * off) leaks into the sleep block below. */
-            runloop_st->frame_limit_minimum_time = 0;
+            runloop_st->frame_limit_minimum_time    = 0;
+            runloop_st->frame_limit_minimum_time_ns = 0;
             goto end;
          }
          else if ((  (settings->bools.video_vsync)
-                  || (settings->bools.video_scanline_sync && video_st->scanline[SCANLINE_NEXT]))
+                  || (settings->bools.video_scanline_sync))
                && (runloop_st->flags & RUNLOOP_FLAG_FOCUSED))
             goto end;
 
          /* Otherwise run menu in video refresh rate speed. */
          if (menu_state_get_ptr()->flags & MENU_ST_FLAG_ALIVE)
+         {
             runloop_st->frame_limit_minimum_time = (retro_time_t)roundf(1000000.0f /
                      ((video_st->video_refresh_rate_original)
                      ? video_st->video_refresh_rate_original
                      : settings->floats.video_refresh_rate));
+            runloop_st->frame_limit_minimum_time_ns = runloop_content_frame_time_ns(
+                     (video_st->video_refresh_rate_original)
+                     ? video_st->video_refresh_rate_original
+                     : settings->floats.video_refresh_rate);
+         }
          else
             runloop_set_frame_limit(&video_st->av_info, settings->floats.fastforward_ratio);
 #endif
@@ -8341,6 +8374,7 @@ end:
     * fast-forward limit; replaced by the content frame time when
     * nothing else is pacing at all (see below). */
    pace_limit_min   = runloop_st->frame_limit_minimum_time;
+   pace_limit_ns    = runloop_st->frame_limit_minimum_time_ns;
    /* The vsync bit reads the driver's blocking state, not the setting:
     * fast-forward (INP_FLAG_NONBLOCKING) and RUNLOOP_FLAG_FORCE_NONBLOCK
     * both put the driver into non-blocking presentation while the
@@ -8420,25 +8454,25 @@ end:
     * not writing, no scanline lock, and no fast-forward limit to fall
     * back on - frame_limit_minimum_time is zero whenever the ratio is
     * "unlimited", which is the default, so the branch above cannot
-    * engage however slowly the core is running. The loop then spins as
-    * fast as the machine allows: a core with a light frame runs at
-    * hundreds of frames a second, burning a core and drowning the
-    * display in frames nobody asked for. It is not fast-forward - the
-    * user did not ask for it - it is the absence of anyone saying when
-    * the next frame is due.
-    *
-    * So the timer takes it, at the content's own rate: 1.0x, the speed
-    * the core is meant to run at, which is what every other pacing
-    * source would have produced. Only when the record is empty, so it
-    * never competes with one that is doing the job, and never under
-    * fast-forward, which is the case where running unthrottled is the
-    * point. */
+    * engage however slowly the core is running. The timer holds the
+    * loop to the display rate, which audio rate control can follow
+    * and which Scanline Sync is aiming at while it recalibrates. See
+    * runloop_pace_gap_engages() for when it stays out. */
    if (runloop_pace_gap_engages(runloop_st->pace,
             (input_st->flags & INP_FLAG_NONBLOCKING) != 0,
-            (runloop_st->flags & RUNLOOP_FLAG_FASTMOTION) != 0))
+            (runloop_st->flags & RUNLOOP_FLAG_FASTMOTION) != 0,
+            settings->bools.video_scanline_sync,
+            settings->bools.audio_rate_control))
    {
       runloop_st->pace         |= RUNLOOP_PACE_TIMER;
-      pace_limit_min            = runloop_content_frame_time_us(video_st->core_hz);
+      pace_limit_min            = runloop_content_frame_time_us(
+            (video_st->video_refresh_rate_original)
+               ? video_st->video_refresh_rate_original
+               : settings->floats.video_refresh_rate);
+      pace_limit_ns             = runloop_content_frame_time_ns(
+            (video_st->video_refresh_rate_original)
+               ? video_st->video_refresh_rate_original
+               : settings->floats.video_refresh_rate);
    }
 
    /* if there's a fast forward limit, inject sleeps to keep from going too fast. */
@@ -8446,42 +8480,57 @@ end:
       retro_time_t frame_limit_min = pace_limit_min;
       if (runloop_st->pace & RUNLOOP_PACE_TIMER)
       {
-         const retro_time_t end_frame_time  = cpu_features_get_time_usec();
-         const retro_time_t to_sleep_us     = (
-               (  runloop_st->frame_limit_last_time
-                + frame_limit_min)
-               - end_frame_time);
-#if defined(__EMSCRIPTEN__) && !defined(EMSCRIPTEN_ASYNCIFY) && !defined(PROXY_TO_PTHREAD)
-         /* Emscripten paces through a deferred main loop timeout that
-          * is expressed in whole milliseconds, so it cannot act on a
-          * sub-millisecond remainder. Keep the old truncation there. */
-         const retro_time_t to_sleep        = to_sleep_us / 1000;
-#else
-         const retro_time_t to_sleep        = to_sleep_us;
-#endif
+         const retro_time_t end_frame_time = cpu_features_get_time_usec();
 
          /* Under an external clock the sleep is the caller's; the
-          * schedule is re-anchored below so it does not carry a
-          * backlog into the first frame after the clock lets go. */
-         if (     to_sleep > 0
-               && !(runloop_st->pace & RUNLOOP_PACE_EXTERNAL))
+          * schedule is re-anchored so it does not carry a backlog into
+          * the first frame after the clock lets go. */
+         if (runloop_st->pace & RUNLOOP_PACE_EXTERNAL)
          {
-            /* Combat jitter a bit. */
-            runloop_st->frame_limit_last_time += frame_limit_min;
-
-#if defined(__EMSCRIPTEN__) && !defined(EMSCRIPTEN_ASYNCIFY) && !defined(PROXY_TO_PTHREAD)
-            platform_emscripten_deferred_sleep((int)to_sleep);
-#else
-#if defined(HAVE_COCOATOUCH)
-            if (!(uico_state_get_ptr()->flags & UICO_ST_FLAG_IS_ON_FOREGROUND))
-#endif
-               retro_sleep_us((unsigned)to_sleep_us);
-#endif
-
-            return 1;
+            runloop_st->frame_limit_last_time = end_frame_time;
+            runloop_st->frame_limit_anchor_ns = (int64_t)end_frame_time * 1000;
          }
-
-         runloop_st->frame_limit_last_time = end_frame_time;
+         else
+         {
+            const retro_time_t to_sleep_us = runloop_pace_schedule(
+                  &runloop_st->frame_limit_anchor_ns,
+                  pace_limit_ns ? pace_limit_ns : (int64_t)frame_limit_min * 1000,
+                  end_frame_time);
+            runloop_st->frame_limit_last_time = runloop_st->frame_limit_anchor_ns / 1000;
+            if (to_sleep_us > 0)
+            {
+#if defined(__EMSCRIPTEN__) && !defined(EMSCRIPTEN_ASYNCIFY) && !defined(PROXY_TO_PTHREAD)
+               /* Emscripten paces through a deferred main loop timeout
+                * that is expressed in whole milliseconds, so it cannot
+                * act on a sub-millisecond remainder, nor spin. */
+               platform_emscripten_deferred_sleep((int)(to_sleep_us / 1000));
+#else
+               /* Sleep short by the margin the sleep has been seen to
+                * overshoot, then spin the remainder to the deadline:
+                * the sleep decides how much is spun, the clock decides
+                * where the frame lands. */
+               const retro_time_t deadline = runloop_st->frame_limit_anchor_ns / 1000;
+               retro_time_t now            = end_frame_time;
+#if defined(HAVE_COCOATOUCH)
+               /* In the background the loop is not paced at all. */
+               if (uico_state_get_ptr()->flags & UICO_ST_FLAG_IS_ON_FOREGROUND)
+                  return 1;
+#endif
+               if (to_sleep_us > runloop_st->frame_limit_margin)
+               {
+                  const retro_time_t asked = to_sleep_us - runloop_st->frame_limit_margin;
+                  retro_sleep_us((unsigned)asked);
+                  now = cpu_features_get_time_usec();
+                  runloop_st->frame_limit_margin = runloop_pace_margin_update(
+                        runloop_st->frame_limit_margin,
+                        now - (end_frame_time + asked), frame_limit_min);
+               }
+               while (now < deadline)
+                  now = cpu_features_get_time_usec();
+#endif
+               return 1;
+            }
+         }
       }
    }
 

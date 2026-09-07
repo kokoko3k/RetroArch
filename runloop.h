@@ -185,6 +185,15 @@ struct runloop
    retro_time_t core_run_time;
    retro_time_t frame_limit_minimum_time;
    retro_time_t frame_limit_last_time;
+   /* The same period and anchor in nanoseconds, for the gap limiter's
+    * schedule: a period rounded to whole microseconds is 21 ppm off
+    * at 59.94 Hz, which the schedule would carry into every frame. */
+   int64_t      frame_limit_minimum_time_ns;
+   int64_t      frame_limit_anchor_ns;
+   /* How early the gap limiter's sleep is asked to return, so the
+    * remainder can be spun to the deadline: the sleep's observed
+    * overshoot, tracked by runloop_pace_margin_update(). */
+   retro_time_t frame_limit_margin;
    /* When the previous iteration reached the pacing block, and the
     * smoothed interval between iterations. The pace bits say who
     * claims to be holding the loop; this says how fast it is actually
@@ -415,14 +424,85 @@ static INLINE retro_time_t runloop_content_frame_time_us(float core_hz)
    return period;
 }
 
-/* Whether the frame limiter should hold the loop at 1.0x because
- * nothing else is: an empty pace record means no vsync, no audio, no
- * scanline lock, and no fast-forward limit to fall back on. Never
- * under fast-forward, where running unthrottled is the point. */
+/* Whether the frame limiter should hold the loop to the display rate
+ * because nothing else is: an empty pace record means no vsync, no
+ * audio, no scanline lock, and no fast-forward limit to fall back on.
+ * With audio rate control, whose resampler follows the loop so the
+ * loop can follow the display; or with Scanline Sync enabled, whose
+ * record bit clears while it recalibrates and which is aiming at the
+ * display rate anyway, so the timer bridges the recalibration rather
+ * than fighting it. Otherwise the content rate is what Sync to Exact
+ * Content Framerate is for, and the loop runs unlimited as
+ * configured. Never under fast-forward, where running unthrottled is
+ * the point. */
 static INLINE bool runloop_pace_gap_engages(unsigned pace,
-      bool nonblocking, bool fastmotion)
+      bool nonblocking, bool fastmotion, bool scanline_sync,
+      bool rate_control)
 {
-   return (pace == RUNLOOP_PACE_NONE) && !nonblocking && !fastmotion;
+   return (pace == RUNLOOP_PACE_NONE)
+      && !nonblocking && !fastmotion && (scanline_sync || rate_control);
+}
+
+/* One frame of the content's own time, in nanoseconds, with the same
+ * bounds as runloop_content_frame_time_us(). */
+static INLINE int64_t runloop_content_frame_time_ns(float core_hz)
+{
+   int64_t period = (core_hz > 0.0f)
+         ? (int64_t)(1000000000.0 / (double)core_hz) : 16666667;
+   if (period < 1000000)
+      return 1000000;
+   if (period > 100000000)
+      return 100000000;
+   return period;
+}
+
+/* The gap limiter's schedule, in nanoseconds so that a period that is
+ * not a whole number of microseconds - 16683.35 us at 59.94 Hz - is
+ * kept exactly over any span. @anchor_ns is where the last frame was
+ * due; the next is due a period after it. Returns the microseconds
+ * until then, rounded up, or 0 when it has passed, and moves
+ * @anchor_ns to the slot the frame is taken as filling: the due time
+ * when on time or late by less than a period, so the lateness is caught
+ * up on the next frame rather than kept; now when late by a period or
+ * more, a stall, from which the schedule restarts rather than chases.
+ * The caller spins to @anchor_ns / 1000 after the sleep. */
+static INLINE retro_time_t runloop_pace_schedule(int64_t *anchor_ns,
+      int64_t period_ns, retro_time_t now_us)
+{
+   int64_t now = (int64_t)now_us * 1000;
+   int64_t due = *anchor_ns + period_ns;
+   if (now < due)
+   {
+      *anchor_ns = due;
+      return (retro_time_t)((due - now + 999) / 1000);
+   }
+   if (now - due < period_ns)
+   {
+      *anchor_ns = due;
+      return 0;
+   }
+   *anchor_ns = now;
+   return 0;
+}
+
+/* The gap limiter's sleep margin: how early the sleep is asked to
+ * return, so the remainder can be spun to the deadline. It tracks the
+ * sleep's observed overshoot - up at once, since one late sleep is a
+ * frame late; down by a sixteenth a frame, so a single quiet sleep does
+ * not unwind it - and never past a quarter of the period, so the spin
+ * stays a fraction of the frame. */
+static INLINE retro_time_t runloop_pace_margin_update(retro_time_t margin,
+      retro_time_t overshoot, retro_time_t period)
+{
+   if (overshoot < 0)
+      overshoot = 0;
+   if (overshoot > margin)
+      margin = overshoot;
+   else
+      margin -= (margin - overshoot) / 16;
+   if (margin > period / 4)
+      margin = period / 4;
+   return margin;
 }
 
 /* Whether an interval between iterations is worth averaging into the

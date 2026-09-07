@@ -315,7 +315,30 @@ typedef struct audio_driver
     * without the estimate, as before.
     */
    size_t (*frames_consumed)(void *data);
+
+   /* Optional. Periods the device played silence for want of audio
+    * since init: the callback found less than one period in the
+    * buffer and zero-filled it. Counted where it happens, one atomic
+    * add on that path only; never logged from there. Read by the
+    * frontend for the statistics overlay each frame, and once at
+    * driver teardown for the log. NULL when the driver cannot tell. */
+   size_t (*underruns)(void *data);
 } audio_driver_t;
+
+/* A snapshot of the sink estimate's counts, taken when a window opens. */
+typedef struct
+{
+   double   offered;                   /* sink_offered */
+   uint64_t consumed;                  /* frames_consumed() */
+} audio_sink_mark_t;
+
+/* A sum of windows: their time, and what the source and the device did. */
+typedef struct
+{
+   int64_t  usec;
+   double   offered;
+   double   consumed;
+} audio_sink_sum_t;
 
 typedef struct
 {
@@ -472,11 +495,43 @@ typedef struct
    /* Upper bound on input samples per consumer pass: one video frame's
     * worth, capped to a slice. */
    size_t   pipe_pass_int16s;
+   /* Rate control's fill on the threaded pipeline, as free space in
+    * device bytes, sampled by the producer before each publish and
+    * read by the consumer's controller; -1 before the first sample.
+    *
+    * The device's own fill cannot be the control variable here: the
+    * consumer waits for half the device's buffer and writes half, so
+    * that fill sits between half and full whatever the clocks do, and a
+    * controller reading it - at any point of the pass - sees a constant
+    * error and pins the ratio at a bound. What the clocks move is the
+    * pipe ring in front of the device: a production surplus collects
+    * there, a deficit empties it. So the fill is the two together, the
+    * pipe's frames counted at the device's rate, and it is read where
+    * the frame-synchronous path read it, once a frame on the core's
+    * thread before the frame is published - the pipe at its low point,
+    * the device wherever it is. The device's mean free space over the
+    * pass is a quarter of its buffer, the controller's setpoint is
+    * half, and the difference is added so a balanced pipe reads as no
+    * error. */
+   retro_atomic_int_t pipe_ctrl_avail;
+   /* The driver's underrun count as the consumer last saw it; a change
+    * means the device played silence since, and what the pipe holds
+    * past its target is late audio, discarded. Consumer thread only. */
+   size_t   pipe_underruns_seen;
+   /* Whether the consumer's next pass is its first: it waits for the
+    * pipe's target then, not just a frame. Consumer thread only after
+    * init. */
+   bool     pipe_priming;
    /* The audio thread's own copy of AUDIO_FLAG_PIPELINE_THREADED. Set
     * before the wrapper thread is released and cleared after it is
     * joined, so the thread never reads the flags word - which the main
     * thread read-modify-writes at will - just to know it is running. */
    bool pipe_threaded;
+   /* The fast-forward speedup multiplier, measured by the producer on
+    * the core's thread and read by the consumer, as a Q16 fixed-point
+    * value. The consumer's own cadence is the device's, so it cannot
+    * measure how fast the core is running; only the producer can. */
+   retro_atomic_int_t pipe_ff_mult_q16;
 #ifdef HAVE_REWIND
    size_t rewind_ptr;
    size_t rewind_size;
@@ -518,7 +573,11 @@ typedef struct
 
    char resampler_ident[64];
 
-   bool reinit_request;
+   /* A driver's request to be reinitialised - a device change or an
+    * unplug, set from its notification thread. Taken by the runloop
+    * once a frame on the main thread with no audio lock held; see
+    * audio_driver_take_reinit_request(). */
+   retro_atomic_int_t reinit_request;
    bool mute_enable;
 #ifdef HAVE_AUDIOMIXER
    bool mixer_mute_enable;
@@ -556,36 +615,35 @@ typedef struct
    /* Sink rate estimation: see audio_driver_sink_update(). Counted
     * where the driver's write() is called, on the thread that flushes;
     * the estimate runs there too. */
-   double   sink_offered;              /* output frames offered to the driver, each
-                                          divided by the bias in force when it was, so
-                                          the sum is what would have been offered
-                                          unbiased: the source's rate on the host clock */
-   uint64_t sink_accepted;             /* output frames the driver took */
+   double   sink_offered;              /* the source's count, in frames at the nominal
+                                          ratio: what the core published into the
+                                          pipeline's ring, or off it what was offered
+                                          with the ratio in force divided out. Owned
+                                          by the thread that closes the windows. */
    uint64_t sink_offered_raw;          /* output frames offered, as offered */
-   double   sink_offered_at;           /* the three at the baseline's start */
-   uint64_t sink_accepted_at;
-   uint64_t sink_offered_raw_at;
-   uint64_t sink_consumed_at;          /* frames_consumed() at the baseline's start */
-   int64_t  sink_baseline_start;       /* usec; 0 = not started */
-   int64_t  sink_check_at;             /* usec; the next plausibility check */
+   uint64_t sink_accepted;             /* output frames the driver took */
+   /* The estimate: windows of a few seconds, each read as a change in
+    * the counts above and in the device's consumption, kept when it
+    * measures the clocks and summed; the bias is the summed ratio.
+    * See audio_driver_sink_update(). */
+   int64_t  sink_started;              /* usec; 0 = not started */
+   int64_t  sink_window_at;            /* usec; when the open window closes */
    int64_t  sink_apply_at;             /* usec; the next setting of the bias */
-   double   sink_check_offered;        /* offered and consumed at the last check */
-   uint64_t sink_check_consumed;
-   int64_t  sink_sum_usec;             /* the windows kept: time, offered, consumed */
-   double   sink_sum_offered;
-   double   sink_sum_consumed;
+   audio_sink_mark_t sink_at_window;   /* the counts when the open window opened */
+   audio_sink_sum_t  sink_kept;        /* the windows summed for the bias */
+   audio_sink_sum_t  sink_pending;     /* windows since the last kept one, for the rates shown meanwhile */
+   unsigned sink_settled;              /* kept windows in a row, up to 2, after which the sums stand */
+   unsigned sink_applied;              /* times the bias has been set */
+   unsigned sink_discarded;            /* windows left out in a row */
+   unsigned sink_warned;               /* AUDIO_SINK_WARNED_* said once each */
    double   sink_bias;                 /* multiplied into the ratio; 1.0 = none */
+   /* The bias for the thread that resamples, in hundredths of a part
+    * per million: on the threaded pipeline the estimate runs on the
+    * core's thread and the resampler on the audio thread, and a double
+    * is not a single word. */
+   retro_atomic_int_t sink_bias_q;
    double   sink_rate_hz;              /* the device's rate as measured; 0 = unknown */
    double   sink_source_hz;            /* the source's rate at the nominal ratio, as measured */
-   double   sink_adjust_sum;           /* DRC adjusts over the baseline, for the mean */
-   unsigned sink_adjust_n;
-   unsigned sink_applied;              /* times the bias has been set from a baseline */
-   unsigned sink_discarded;            /* windows discarded in a row */
-   bool     sink_drop_warned;
-   /* Said once when a measured ratio is too far off to be a crystal. */
-   bool     sink_implausible_warned;
-   /* Said once when the buffer empties faster than corrections arrive. */
-   bool     sink_too_slow_warned;
    size_t   samples_since_drc;         /* int16 samples submitted since last update */
    size_t   drc_threshold_int16s;      /* one frame's worth of stereo int16 at the current rate */
    /* Set by audio_driver_frame_end() so the next flush recomputes the
@@ -921,6 +979,18 @@ audio_driver_state_t *audio_state_get_ptr(void);
 void audio_driver_update_drc_threshold(audio_driver_state_t *audio_st);
 
 const char *audio_driver_get_ident(void);
+
+/* Periods the device played silence for want of audio since the driver
+ * was initialised, where the driver counts them; 0 otherwise. */
+size_t audio_driver_get_underruns(void);
+
+/* Whether a driver has asked to be reinitialised since the last call;
+ * clears the request. The runloop calls this once a frame, on the main
+ * thread, holding no audio lock, and acts on it there: the reinit
+ * tears the driver down and up, which frees the state lock and, on
+ * the threaded pipeline, joins the audio thread, so it can be run
+ * neither under the lock nor from that thread. */
+bool audio_driver_take_reinit_request(void);
 
 double audio_driver_get_buffer_latency_ms(void);
 
