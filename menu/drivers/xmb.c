@@ -5953,8 +5953,9 @@ XMB_NOINLINE static int xmb_draw_item(
        * buffer sits in a frame that is entered once per visible entry
        * per frame. */
       char entry_path[sizeof(entry.path)];
-      strlcpy(entry_path, entry.path, sizeof(entry_path));
-      fill_pathname(entry_path, path_basename(entry_path), "",
+      /* Source from entry.path so the copy never overlaps its own
+       * destination; fortified strlcpy() traps on overlap. */
+      fill_pathname(entry_path, path_basename(entry.path), "",
             sizeof(entry_path));
       if (*entry_path)
          strlcpy(entry.path, entry_path, sizeof(entry.path));

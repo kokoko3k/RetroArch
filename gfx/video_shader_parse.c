@@ -209,10 +209,9 @@ static void video_shader_replace_wildcards_impl(
                      fill_pathname_parent_dir_name(content_dir_name,
                            rarch_path_basename,
                            sizeof(content_dir_name));
-                  if (content_dir_name[0] != '\0')
-                     strlcpy(content_dir_name,
-                           path_basename_nocompression(content_dir_name),
-                           sizeof(content_dir_name));
+                  /* fill_pathname_parent_dir_name() yields a bare
+                   * directory name, so there is no directory part
+                   * left to strip here. */
                   if (content_dir_name[0] != '\0')
                      path_remove_extension(content_dir_name);
 
@@ -298,10 +297,6 @@ static void video_shader_replace_wildcards_impl(
                   char preset_dir_name[DIR_MAX_LENGTH];
                   fill_pathname_parent_dir_name(preset_dir_name,
                         in_preset_path, sizeof(preset_dir_name));
-                  if (preset_dir_name[0] != '\0')
-                     strlcpy(preset_dir_name,
-                           path_basename_nocompression(preset_dir_name),
-                           sizeof(preset_dir_name));
                   if (preset_dir_name[0] != '\0')
                      path_remove_extension(preset_dir_name);
                   if (preset_dir_name[0] != '\0')
