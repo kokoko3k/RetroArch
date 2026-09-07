@@ -848,6 +848,45 @@ static void test_settings_table(void)
    companion_core_free(c);
 }
 
+/* Hidden playlists: the comma-separated setting Qt's context menu
+ * maintains, parsed and written in C (string_split drops empty parts on
+ * every Qt back to 4, which Qt's own split() flag does not). */
+static void test_hidden_playlists(void)
+{
+   companion_core_t *c = make_core();
+   const char *nes = "/pl/Nintendo - Nintendo Entertainment System.lpl";
+   const char *gen = "/pl/Sega - Mega Drive - Genesis.lpl";
+   test_settings.arrays.desktop_menu_hidden_playlists[0] = '\0';
+   CHECK(!companion_core_playlist_is_hidden(c, nes), "nothing hidden to start");
+   companion_core_playlist_set_hidden(c, nes, true);
+   CHECK(companion_core_playlist_is_hidden(c, nes), "hidden after setting");
+   CHECK(string_is_equal(test_settings.arrays.desktop_menu_hidden_playlists,
+            "Nintendo - Nintendo Entertainment System.lpl"), "the file name only (got %s)",
+         test_settings.arrays.desktop_menu_hidden_playlists);
+   companion_core_playlist_set_hidden(c, nes, true);
+   CHECK(string_is_equal(test_settings.arrays.desktop_menu_hidden_playlists,
+            "Nintendo - Nintendo Entertainment System.lpl"), "hiding twice adds one entry");
+   companion_core_playlist_set_hidden(c, gen, true);
+   CHECK(companion_core_playlist_is_hidden(c, gen) && companion_core_playlist_is_hidden(c, nes), "both hidden");
+   companion_core_playlist_set_hidden(c, nes, false);
+   CHECK(!companion_core_playlist_is_hidden(c, nes) && companion_core_playlist_is_hidden(c, gen), "one unhidden, the other kept");
+   CHECK(string_is_equal(test_settings.arrays.desktop_menu_hidden_playlists,
+            "Sega - Mega Drive - Genesis.lpl"), "list rewritten (got %s)",
+         test_settings.arrays.desktop_menu_hidden_playlists);
+   /* a stray comma must not survive, and must not match "" */
+   strlcpy(test_settings.arrays.desktop_menu_hidden_playlists, "a.lpl,,b.lpl,",
+         sizeof(test_settings.arrays.desktop_menu_hidden_playlists));
+   CHECK(!companion_core_playlist_is_hidden(c, "/pl/"), "an empty name matches nothing");
+   companion_core_playlist_set_hidden(c, "/pl/c.lpl", true);
+   CHECK(string_is_equal(test_settings.arrays.desktop_menu_hidden_playlists, "a.lpl,b.lpl,c.lpl"),
+         "empty parts dropped on the round trip (got %s)", test_settings.arrays.desktop_menu_hidden_playlists);
+   companion_core_playlist_set_hidden(c, "/pl/nothere.lpl", false);
+   CHECK(string_is_equal(test_settings.arrays.desktop_menu_hidden_playlists, "a.lpl,b.lpl,c.lpl"),
+         "unhiding an absent name changes nothing");
+   test_settings.arrays.desktop_menu_hidden_playlists[0] = '\0';
+   companion_core_free(c);
+}
+
 static void test_run_paths(void)
 {
    companion_core_t *c = make_core();
@@ -907,6 +946,7 @@ int main(void)
    test_rename_add_install();
    test_options_and_shader_params();
    test_settings_table();
+   test_hidden_playlists();
    test_run_paths();
    test_launch_options();
    teardown();

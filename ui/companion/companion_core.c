@@ -724,6 +724,67 @@ void companion_core_shader_apply(companion_core_t *core)
    command_event(CMD_EVENT_SHADERS_APPLY_CHANGES, NULL);
 }
 
+/* --- hidden playlists ----------------------------------------------------- */
+
+bool companion_core_playlist_is_hidden(companion_core_t *core, const char *path)
+{
+   settings_t *settings = config_get_ptr();
+   struct string_list *list;
+   const char *name;
+   size_t i;
+   bool found = false;
+   (void)core;
+   if (string_is_empty(path)
+         || string_is_empty(settings->arrays.desktop_menu_hidden_playlists))
+      return false;
+   name = path_basename(path);
+   if (!(list = string_split(settings->arrays.desktop_menu_hidden_playlists, ",")))
+      return false;
+   for (i = 0; i < list->size && !found; i++)
+      found = string_is_equal(list->elems[i].data, name);
+   string_list_free(list);
+   return found;
+}
+
+void companion_core_playlist_set_hidden(companion_core_t *core,
+      const char *path, bool hidden)
+{
+   settings_t *settings = config_get_ptr();
+   struct string_list *list, *out;
+   union string_list_elem_attr attr;
+   const char *name;
+   size_t i;
+   (void)core;
+   if (string_is_empty(path))
+      return;
+   name = path_basename(path);
+   /* string_split drops empty parts, so a stray comma cannot survive a
+    * round trip; an empty setting starts an empty list. */
+   list = string_is_empty(settings->arrays.desktop_menu_hidden_playlists)
+      ? string_list_new()
+      : string_split(settings->arrays.desktop_menu_hidden_playlists, ",");
+   if (!list)
+      return;
+   /* No remove in the list API: build the new list by appending every
+    * name that is not this one, then this one when hiding. */
+   if (!(out = string_list_new()))
+   {
+      string_list_free(list);
+      return;
+   }
+   attr.i = 0;
+   for (i = 0; i < list->size; i++)
+      if (!string_is_equal(list->elems[i].data, name))
+         string_list_append(out, list->elems[i].data, attr);
+   if (hidden)
+      string_list_append(out, name, attr);
+   string_list_free(list);
+   settings->arrays.desktop_menu_hidden_playlists[0] = '\0';
+   string_list_join_concat(settings->arrays.desktop_menu_hidden_playlists,
+         sizeof(settings->arrays.desktop_menu_hidden_playlists), out, ",");
+   string_list_free(out);
+}
+
 /* --- rename / add files / thumbnail install ------------------------------ */
 
 bool companion_core_playlist_rename(companion_core_t *core,

@@ -82,22 +82,22 @@ extern "C" {
 
 /* Replace characters unsafe in URLs / file names with '_' */
 
-/* hidden_playlists is a comma-separated list of .lpl file names in
- * retroarch.cfg (desktop_menu_hidden_playlists); QStringList in and out. */
-static QStringList qt_hidden_playlists(void)
+/* The hidden-playlist list (desktop_menu_hidden_playlists in
+ * retroarch.cfg) is parsed and written by the shared core, in C: Qt's
+ * own split() takes its empty-parts flag from Qt::SkipEmptyParts on
+ * 5.14+ and QString::SkipEmptyParts before that, and string_split()
+ * drops empty parts on every Qt back to 4. The natives use the same
+ * two calls. */
+static bool qt_playlist_hidden(const QString &path)
 {
-   const char *v = config_get_ptr()->arrays.desktop_menu_hidden_playlists;
-   if (string_is_empty(v))
-      return QStringList();
-   return QString::fromUtf8(v).split(',', Qt::SkipEmptyParts);
+   return companion_core_playlist_is_hidden(ui_companion_qt_core(),
+         path.toUtf8().constData());
 }
 
-static void qt_set_hidden_playlists(const QStringList &list)
+static void qt_set_playlist_hidden(const QString &path, bool hidden)
 {
-   QByteArray joined = list.join(',').toUtf8();
-   strlcpy(config_get_ptr()->arrays.desktop_menu_hidden_playlists,
-         joined.constData(),
-         sizeof(config_get_ptr()->arrays.desktop_menu_hidden_playlists));
+   companion_core_playlist_set_hidden(ui_companion_qt_core(),
+         path.toUtf8().constData(), hidden);
 }
 
 #ifdef HAVE_MENU
@@ -7964,14 +7964,7 @@ void MainWindow::onPlaylistWidgetContextMenuRequested(const QPoint&)
 
       if (row >= 0)
       {
-         QStringList hiddenPlaylists = qt_hidden_playlists();
-
-         if (!hiddenPlaylists.contains(currentPlaylistFileName))
-         {
-            hiddenPlaylists.append(currentPlaylistFileName);
-            qt_set_hidden_playlists(hiddenPlaylists);
-         }
-
+         qt_set_playlist_hidden(currentPlaylistFileName, true);
          m_listWidget->setRowHidden(row, true);
       }
    }
@@ -7981,7 +7974,6 @@ void MainWindow::onPlaylistWidgetContextMenuRequested(const QPoint&)
 
       if (rowVariant.isValid())
       {
-         QStringList hiddenPlaylists = qt_hidden_playlists();
          int row = rowVariant.toInt();
 
          if (row >= 0)
@@ -7990,12 +7982,7 @@ void MainWindow::onPlaylistWidgetContextMenuRequested(const QPoint&)
             QFileInfo playlistFileInfo(playlistPath);
             QString playlistFileName = playlistFileInfo.fileName();
 
-            if (hiddenPlaylists.contains(playlistFileName))
-            {
-               hiddenPlaylists.removeOne(playlistFileName);
-               qt_set_hidden_playlists(hiddenPlaylists);
-            }
-
+            qt_set_playlist_hidden(playlistFileName, false);
             m_listWidget->setRowHidden(row, false);
          }
       }
@@ -8032,7 +8019,6 @@ void MainWindow::reloadPlaylists()
    settings_t *settings                    = config_get_ptr();
    const char *path_dir_playlist           = settings->paths.directory_playlist;
    QDir playlistDir(path_dir_playlist);
-   QStringList hiddenPlaylists             = qt_hidden_playlists();
 
    QListWidgetItem *currentItem            = m_listWidget->currentItem();
 
@@ -8071,17 +8057,17 @@ void MainWindow::reloadPlaylists()
    m_listWidget->addItem(musicPlaylistsItem);
    m_listWidget->addItem(videoPlaylistsItem);
 
-   if (hiddenPlaylists.contains(ALL_PLAYLISTS_TOKEN))
+   if (qt_playlist_hidden(ALL_PLAYLISTS_TOKEN))
       m_listWidget->setRowHidden(m_listWidget->row(allPlaylistsItem), true);
-   if (hiddenPlaylists.contains(QFileInfo(settings->paths.path_content_favorites).fileName()))
+   if (qt_playlist_hidden(QFileInfo(settings->paths.path_content_favorites).fileName()))
       m_listWidget->setRowHidden(m_listWidget->row(favoritesPlaylistsItem), true);
-   if (hiddenPlaylists.contains(QFileInfo(settings->paths.path_content_history).fileName()))
+   if (qt_playlist_hidden(QFileInfo(settings->paths.path_content_history).fileName()))
       m_listWidget->setRowHidden(m_listWidget->row(m_historyPlaylistsItem), true);
-   if (hiddenPlaylists.contains(QFileInfo(settings->paths.path_content_image_history).fileName()))
+   if (qt_playlist_hidden(QFileInfo(settings->paths.path_content_image_history).fileName()))
       m_listWidget->setRowHidden(m_listWidget->row(imagePlaylistsItem), true);
-   if (hiddenPlaylists.contains(QFileInfo(settings->paths.path_content_music_history).fileName()))
+   if (qt_playlist_hidden(QFileInfo(settings->paths.path_content_music_history).fileName()))
       m_listWidget->setRowHidden(m_listWidget->row(musicPlaylistsItem), true);
-   if (hiddenPlaylists.contains(QFileInfo(settings->paths.path_content_video_history).fileName()))
+   if (qt_playlist_hidden(QFileInfo(settings->paths.path_content_video_history).fileName()))
       m_listWidget->setRowHidden(m_listWidget->row(videoPlaylistsItem), true);
 
    for (i = 0; i < m_playlistFiles.count(); i++)
@@ -8120,7 +8106,7 @@ void MainWindow::reloadPlaylists()
 
       m_listWidget->addItem(item);
 
-      if (hiddenPlaylists.contains(fileName))
+      if (qt_playlist_hidden(fileName))
       {
          int row = m_listWidget->row(item);
 

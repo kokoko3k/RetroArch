@@ -6,7 +6,13 @@ which fires every action the Cocoa controller implements on a real
 AppKit under GNUstep. Prints the table and the gap lists; exit 0."""
 import re, sys, os
 root = os.path.join(os.path.dirname(__file__), '..')
-qt  = open(os.path.join(root, 'ui/drivers/ui_qt.cpp')).read()
+# Qt's companion is split across the window and the widgets file: read
+# both, or a feature implemented in the other one reads as absent (the
+# playlist hide/show action lives in ui_qt_widgets.cpp, and every Qt
+# column was being tested against ui_qt.cpp alone).
+qt  = (open(os.path.join(root, 'ui/drivers/ui_qt.cpp')).read()
+     + open(os.path.join(root, 'ui/drivers/ui_qt_widgets.cpp')).read()
+     + open(os.path.join(root, 'ui/drivers/ui_qt.h')).read())
 cc  = open(os.path.join(root, 'ui/drivers/ui_cocoa_companion.m')).read()
 w32 = open(os.path.join(root, 'ui/drivers/ui_win32_companion.c')).read()
 FEATS = [
@@ -19,7 +25,7 @@ FEATS = [
  ("Help: About",                      r"MENU_HELP_ABOUT\b", r"aboutRetroArch|orderFrontStandardAboutPanel", r"IDM_CW_HELP_ABOUT\b"),
  ("Help: About contributors",         r"CONTRIBUTORS", r"aboutContributors", r"IDM_CW_HELP_CONTRIBUTORS"),
  ("Playlist context: rename",         r"renamePlaylist|PLAYLIST_RENAME", r"renamePlaylist", r"IDM_CW_RENAME_PLAYLIST"),
- ("Playlist context: hide/show",      r"hidePlaylist|HIDE_PLAYLIST", r"hidePlaylist", r"hide_playlist|HIDE"),
+ ("Playlist context: hide/show",      r"hideAction", r"companion_core_playlist_set_hidden", r"companion_core_playlist_set_hidden"),
  ("Playlist context: download thumbnails", r"thumbnailPack|DOWNLOAD_THUMBNAILS", r"thumbnail_pack|downloadThumbnails", r"thumbnail_pack|DOWNLOAD_THUMB"),
  ("Entry context: set core association", r"SET_CORE_ASSOCIATION|associat", r"associateCore", r"associate|ASSOCIATION"),
  ("Entry context: delete entry",      r"deletePlaylistItem|DELETE_ENTRY|deleteEntry", r"deleteEntry", r"delete_entry|DELETE_ENTRY"),

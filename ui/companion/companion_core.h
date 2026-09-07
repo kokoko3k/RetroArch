@@ -450,6 +450,15 @@ playlist_t *companion_core_playlist_open(companion_core_t *core,
 /* Write @playlist to disk if @write, then free it if @owned. */
 void companion_core_playlist_release(companion_core_t *core,
       playlist_t *playlist, bool owned, bool write);
+/* Hidden playlists: the comma-separated file-name list Qt's context
+ * menu maintains (desktop_menu_hidden_playlists in retroarch.cfg).
+ * @path is a playlist file path; only its file name is stored. The
+ * listing itself is unaffected - a backend decides what to do with the
+ * answer, as Qt's "Hide" does. */
+bool companion_core_playlist_is_hidden(companion_core_t *core, const char *path);
+void companion_core_playlist_set_hidden(companion_core_t *core,
+      const char *path, bool hidden);
+
 /* Rename playlist file @path to @new_name (no directory, no extension)
  * within the playlists directory, as Qt's rename does: special
  * playlists (history, favorites - outside that directory) cannot be

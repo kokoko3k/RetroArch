@@ -85,6 +85,7 @@ FEATURES = {
     'rename playlist':    'companion_core_playlist_rename',
     'add files':          'companion_core_playlist_add_files',
     'thumbnail drop':     'companion_core_thumbnail_install',
+    'hidden playlists':   'companion_core_playlist_is_hidden',
     # Qt's View > Core Options, View > Shader Parameters, View > Options
     'core options':       'companion_core_option_count',
     'shader parameters':  'companion_core_shader_param_count',
@@ -105,6 +106,13 @@ WAIVERS = {
     # source), not a file path, and saves through QImage; the core call
     # takes a path.
     ('qt', 'thumbnail drop'): 'Qt: QImage drop saved via changeThumbnail',
+    # The hidden-playlist list is in the core (Qt reads and writes it
+    # there), but only Qt has the UI for it - a context-menu Hide and a
+    # submenu of hidden playlists to bring back. The natives need a row
+    # map in their playlist lists before they can hide rows; until then
+    # they show every playlist, which is the pre-existing behaviour.
+    ('win32', 'hidden playlists'): 'no hide UI yet; core call is Qt-side only',
+    ('cocoa', 'hidden playlists'): 'no hide UI yet; core call is Qt-side only',
     # Qt's three dialogs predate the core and read RetroArch directly
     # (CoreOptionsDialog, ShaderParamsDialog, ViewOptionsWidget).
     ('qt', 'core options'):      'Qt: CoreOptionsDialog reads runloop core_options directly',
