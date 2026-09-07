@@ -156,6 +156,13 @@ int main(void)
                 "animate() will never advance it\n");
          bad = 1;
       }
+      /* The install must reflect the real mapping: a reservation build
+       * is windowed here (WebP is small, but the open reserves). */
+      if (!th.anim_windowed)
+      {
+         printf("[FAIL] a reserved open produced a non-windowed thumbnail\n");
+         bad = 1;
+      }
       for (i = 0; i < 240 && gt_uploads < 3; i++)
       {
          gfx_thumbnail_animate(&th);

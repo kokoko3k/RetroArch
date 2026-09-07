@@ -23,6 +23,7 @@
 
 #include "harness.h"
 #include "../../../gfx/gfx_thumbnail.h"
+#include "../../../libretro-common/include/formats/data_transfer.h"
 
 static double rss_mib(void)
 {
@@ -52,6 +53,9 @@ static void check(const char *tag, const char *what, int ok)
    (void)tag;
 }
 
+/* expect_video: 1 = must play; 2 = reservation is off, so a file too
+ * large for a whole-file mapping may fall back to a still - what is
+ * checked then is only that RSS stays bounded and the flag is honest. */
 static void run(const char *path, const char *label, int expect_video)
 {
    gfx_thumbnail_t th;
@@ -99,7 +103,21 @@ static void run(const char *path, const char *label, int expect_video)
          hp.texture_uploads, hp.fade_pushes, hp.still_loads,
          hp.last_tex_w, hp.last_tex_h);
 
-   if (expect_video)
+   if (expect_video == 2)
+   {
+      /* No reservation: whatever the outcome, the file must not be
+       * resident-loaded and the flag must match the mapping. A small
+       * file still plays; a multi-GB one may become a still. */
+      check(label, "N1 RSS growth < 600 MiB (no whole-file load)", (peak - rss0) < 600.0);
+      check(label, "N2 windowed flag matches the mapping",
+            (th.anim_windowed ? 1 : 0)
+            == (th.anim_dt && data_transfer_window_is_reserved(
+                  (data_transfer_t*)th.anim_dt) ? 1 : 0));
+      check(label, "N3 not windowed without a reservation", !th.anim_windowed);
+      printf("      [noreserve] RSS %.1f -> %.1f MiB uploads=%d stills=%d\n",
+            rss0, peak, hp.texture_uploads, hp.still_loads);
+   }
+   else if (expect_video)
    {
       check(label, "R1 texture uploaded",  hp.texture_uploads > 0);
       check(label, "R2 status AVAILABLE",  th.status == GFX_THUMBNAIL_STATUS_AVAILABLE);
@@ -107,6 +125,16 @@ static void run(const char *path, const char *label, int expect_video)
             (th.alpha > 0.0f) || (hp.fade_pushes > 0));
       check(label, "R4 no whole-file still load queued", hp.still_loads == 0);
       check(label, "R5 RSS growth < 600 MiB", (peak - rss0) < 600.0);
+      /* The install's windowed flag must match how the file was
+       * actually mapped. With reservation off (pass "noreserve") the
+       * open degrades to a whole-file mapping and the flag is false;
+       * hardcoding it to 1 (the regression) both mis-admits a multi-GB
+       * file and feeds the decoder against an already-resident buffer.
+       * data_transfer_window_is_reserved is the ground truth. */
+      check(label, "R6 windowed flag matches the mapping",
+            (th.anim_windowed ? 1 : 0)
+            == (th.anim_dt && data_transfer_window_is_reserved(
+                  (data_transfer_t*)th.anim_dt) ? 1 : 0));
       /* Preview audio is bounded by gfx_thumb_anim_mem_ok, so a file
        * past GFX_THUMB_ANIM_ABS_MAX_FILE is meant to be silent - that
        * is policy, not breakage.  Under the cap it must start AND get
@@ -148,6 +176,20 @@ int main(int argc, char **argv)
    }
    for (i = 1; i < argc; i++)
       run(argv[i], argv[i], 1);
+
+   /* Second pass over the same files with address-space reservation
+    * refused (MEMMAP_TEST_NO_RESERVE build + this env), so the whole-
+    * file mapping path is exercised: the windowed flag must be false
+    * and RSS must not balloon to the file size on the huge sparse
+    * fixtures. This is the path the companion-UI merge regressed. */
+   setenv("MEMMAP_NO_RESERVE", "1", 1);
+   for (i = 1; i < argc; i++)
+   {
+      char lbl[512];
+      snprintf(lbl, sizeof(lbl), "%s [noreserve]", argv[i]);
+      run(argv[i], lbl, 2);
+   }
+   unsetenv("MEMMAP_NO_RESERVE");
 
    printf("\n%s (%d failure%s)\n", fails ? "FAIL" : "PASS", fails,
          fails == 1 ? "" : "s");

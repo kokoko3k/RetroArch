@@ -60,7 +60,7 @@ SOURCES := gfx_thumbnail_preview_test.c \
 CFLAGS  += -Wall -std=gnu99 -g -O1 \
            -DHAVE_RMP4 -DHAVE_RWEBM -DHAVE_RAAC -DHAVE_RH264 \
            -DHAVE_AUDIOMIXER \
-           -DHAVE_MMAP -D_GNU_SOURCE \
+           -DHAVE_MMAP -D_GNU_SOURCE -DMEMMAP_TEST_NO_RESERVE \
            -I. -I$(REPO_ROOT) -I$(LIBRETRO_COMM_DIR)/include
 
 UUT_CFLAGS := $(CFLAGS) -O0 -fno-inline -DHAVE_MENU -DRARCH_INTERNAL \

@@ -125,6 +125,11 @@ gfx_anim_preview_t *gfx_anim_preview_wrap(void *stream,
       const uint8_t *base, size_t len, bool windowed, const char *path);
 void gfx_anim_preview_release(gfx_anim_preview_t *p);
 
+/* Whether the session's mapping is a sliding window (a reservation)
+ * rather than a whole-file buffer. gfx_thumbnail carries this into its
+ * own install so admission and the feeder agree with the open. */
+bool gfx_anim_preview_windowed(const gfx_anim_preview_t *p);
+
 /* Preview audio: start the container's audio track looping through the
  * mixer (WEBM / MP4 only; honours the menu_thumbnail_preview_audio
  * setting), feed its window per tick, stop it. Main thread. */

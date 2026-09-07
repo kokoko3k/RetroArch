@@ -656,6 +656,11 @@ gfx_anim_preview_t *gfx_anim_preview_wrap(void *stream,
    return p;
 }
 
+bool gfx_anim_preview_windowed(const gfx_anim_preview_t *p)
+{
+   return p && p->windowed;
+}
+
 void gfx_anim_preview_release(gfx_anim_preview_t *p)
 {
    if (!p)

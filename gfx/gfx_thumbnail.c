@@ -785,11 +785,21 @@ static void gfx_thumbnail_anim_open_probed(gfx_thumbnail_t *thumbnail,
       const uint8_t *base       = p->base;
       size_t blen               = p->len;
       enum image_type_enum type = p->type;
+      /* Carry the session's real windowed flag into install, not a
+       * hardcoded 1: gfx_anim_preview_open() sets it to whether the
+       * mapping is a reservation (data_transfer_window_is_reserved).
+       * Where reservation is unavailable the open degrades to a
+       * whole-file read and the flag is false - install must then
+       * charge the whole file to memory admission and skip the sliding-
+       * window feed, or a multi-GB video is admitted as if it cost one
+       * small window and the feeder chases a frontier in an already
+       * fully resident buffer. */
+      int windowed              = gfx_anim_preview_windowed(p) ? 1 : 0;
       p->stream = NULL;
       p->dt     = NULL;
       gfx_anim_preview_release(p);
       gfx_thumbnail_anim_install(thumbnail, stream, type,
-            (void*)base, blen, dt, 1, path);
+            (void*)base, blen, dt, windowed, path);
    }
 }
 
