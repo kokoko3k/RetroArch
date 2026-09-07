@@ -27,6 +27,7 @@
 
 #include <objc/objc-runtime.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <ctype.h>
 #include <string.h>
@@ -888,6 +889,19 @@ static NSImage *cc_image_from_argb(const uint32_t *bits, int w, int h)
 }
 
 /* Boxart-pane requests carry the entry index and this bit. */
+/* The generation rides in the top 32 bits where there are any. A
+ * sizeof() ternary does not help - both arms are compiled, so a 32-bit
+ * build (the 10.4 PPC / i386 cross) gets an undefined shift by 32. */
+#if defined(UINTPTR_MAX) && UINTPTR_MAX > 0xffffffffu
+#define CC_TAG(row, gen) ((uintptr_t)(row) | ((uintptr_t)(gen) << 32))
+#define CC_TAG_GEN(t)    ((unsigned)((t) >> 32))
+#define CC_TAG_HAS_GEN   1
+#else
+#define CC_TAG(row, gen) ((uintptr_t)(row))
+#define CC_TAG_GEN(t)    (0u)
+#define CC_TAG_HAS_GEN   0
+#endif
+
 #define CC_TAG_BOXART ((uintptr_t)1 << (sizeof(uintptr_t) * 8 - 1))
 
 /* Engine delivery: tag = row | gen << 32. */
@@ -946,7 +960,7 @@ static void cc_thumb_done(void *ud, const char *path, int w, int h,
       return;
    }
    row = (NSInteger)(tag & 0xffffffffu);
-   if (sizeof(uintptr_t) > 4 && (unsigned)(tag >> 32) != thumbGen)
+   if (CC_TAG_HAS_GEN && CC_TAG_GEN(tag) != thumbGen)
       return;
    /* Against the array's own length: the entry count can have moved on
     * since it was allocated (a delivery for the previous list). */
@@ -999,7 +1013,7 @@ static void cc_thumb_done(void *ud, const char *path, int w, int h,
       return;
    }
    companion_thumbs_request(thumbs, path, edge, edge,
-         (uintptr_t)row | (sizeof(uintptr_t) > 4 ? ((uintptr_t)thumbGen << 32) : 0),
+         CC_TAG(row, thumbGen),
          urgent ? true : false, 0xffffffffu);
 }
 

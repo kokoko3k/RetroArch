@@ -518,9 +518,23 @@ static void cw_thumb_install(ui_companion_win32_wimp_t *w, size_t row,
 
 /* Engine delivery: tag = row | (gen << 32) (gen in the high bits on
  * 64-bit; on 32-bit the row alone, checked against row_count). */
-#define CW_TAG(row, gen) ((uintptr_t)(row) | (sizeof(uintptr_t) > 4 ? ((uintptr_t)(gen) << 32) : 0))
-#define CW_TAG_ROW(t)    ((size_t)((t) & (sizeof(uintptr_t) > 4 ? 0xffffffffu : (uintptr_t)-1)))
-#define CW_TAG_GEN(t)    ((unsigned)(sizeof(uintptr_t) > 4 ? ((t) >> 32) : 0))
+/* The generation rides in the top 32 bits where there are any. A
+ * sizeof() ternary does not help: both arms are still compiled, so a
+ * 32-bit build gets a shift by 32 - undefined, and MSVC's C4293. The
+ * preprocessor has to make the choice. */
+#if defined(UINTPTR_MAX) && UINTPTR_MAX > 0xffffffffu
+#define CW_TAG(row, gen) ((uintptr_t)(row) | ((uintptr_t)(gen) << 32))
+#define CW_TAG_ROW(t)    ((size_t)((t) & 0xffffffffu))
+#define CW_TAG_GEN(t)    ((unsigned)((t) >> 32))
+#define CW_TAG_HAS_GEN   1
+#else
+/* 32-bit: no room for it, so every delivery is current (the row and
+ * size checks still reject a stale one). */
+#define CW_TAG(row, gen) ((uintptr_t)(row))
+#define CW_TAG_ROW(t)    ((size_t)(t))
+#define CW_TAG_GEN(t)    (0u)
+#define CW_TAG_HAS_GEN   0
+#endif
 
 /* Boxart-pane requests are tagged with the entry index and this bit. */
 #define CW_TAG_BOXART ((uintptr_t)1 << (sizeof(uintptr_t) * 8 - 1))
@@ -542,7 +556,7 @@ static void cw_thumb_done(void *ud, const char *path, int bw, int bh,
       return;
    }
    row = CW_TAG_ROW(tag);
-   if (sizeof(uintptr_t) > 4 && CW_TAG_GEN(tag) != w->gen)
+   if (CW_TAG_HAS_GEN && CW_TAG_GEN(tag) != w->gen)
       return;                       /* for a list since replaced */
    if (row >= w->row_count || bw != w->thumb_px || bh != w->thumb_px)
       return;
@@ -1170,16 +1184,16 @@ static void cw_layout(ui_companion_win32_wimp_t *w)
       /* Centre: the content view with Qt's footer ("N items" left,
        * View combo right). */
       {
-         int fh   = C + 2 * P;
-         int eh   = list_h - fh;
-         int cb_w = CW_S(w, 110);   /* View combo */
-         int lb_w = CW_S(w, 44);    /* "View" caption */
+         int fh        = C + 2 * P;
+         int eh        = list_h - fh;
+         int cb_w      = CW_S(w, 110);   /* View combo */
+         int lb_w      = CW_S(w, 44);    /* "View" caption */
+         int list_room = C + 5 * (w->text_h + CW_S(w, 4)); /* combo drop room */
+         int tb_w      = CW_S(w, 130);   /* Thumbnail type combo */
+         int zs_w      = CW_S(w, 140);   /* zoom slider */
+         int x         = entry_x + entry_w - P;
          if (eh < 0)
             eh = 0;
-         int list_room = C + 5 * (w->text_h + CW_S(w, 4)); /* combo drop room */
-         int tb_w = CW_S(w, 130);   /* Thumbnail type combo */
-         int zs_w = CW_S(w, 140);   /* zoom slider */
-         int x    = entry_x + entry_w - P;
          MoveWindow(w->entries, entry_x, 0, entry_w, eh, TRUE);
          MoveWindow(w->items_label, entry_x + P, eh + P + (C - L) / 2,
                CW_S(w, 160), L, TRUE);

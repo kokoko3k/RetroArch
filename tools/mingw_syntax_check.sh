@@ -69,6 +69,15 @@ C89FLAGS="-fsyntax-only -std=c89 -ansi -pedantic -Werror=pedantic \
  -DHAVE_NETWORKING -DHAVE_CHEEVOS -DHAVE_RUNAHEAD -DHAVE_REWIND \
  -DHAVE_AUDIOMIXER -DHAVE_OVERLAY -DHAVE_RGUI -DHAVE_XMB -DHAVE_OZONE"
 
+# A Win32-only translation unit cannot be C89-checked with the host gcc:
+# <windows.h> is not there, the pass dies on the include and the
+# missing-header filter below forgives it - so ui_win32_companion.c was
+# silently never checked, and MSVC 2005 found the C89 violations instead.
+# Use the 32-bit mingw compiler for those when it is installed (the width
+# MSVC 2005 builds, where a shift by 32 is undefined too).
+C89CC_WIN32="${C89CC_WIN32:-i686-w64-mingw32-gcc}"
+command -v "$C89CC_WIN32" >/dev/null 2>&1 || C89CC_WIN32=""
+
 fail=0; n=0
 for f in $FILES; do
    n=$((n+1))
@@ -82,12 +91,31 @@ for f in $FILES; do
    if [ -n "$err" ]; then
       echo "FAIL [win32] $f"; echo "$err" | sed 's/^/     /'; fail=1
    fi
-   # Skip pass 2 for files that are Windows-only by path; they are not
-   # in the linux-c89 job and -ansi breaks the Windows headers.
+   # Windows-only translation units cannot take pass 2 with the host
+   # gcc (<windows.h> is not there, and -ansi breaks those headers
+   # anyway). They still have to satisfy C89 - MSVC 2005 builds them -
+   # so use the 32-bit mingw compiler when it is installed: same width
+   # as that build, so a shift by 32 shows up too. Without it, say so
+   # rather than pass silently, which is how declarations after
+   # statements reached master in ui_win32_companion.c.
+   cc89="$C89CC"
    case "$f" in
-      *win32*|*dinput*|*xinput*|*wasapi*|*xaudio*|*asio*|*dsound*|*d3d*|*dxgi*|*wgl*|*uwp*|*winraw*|*_w.c|*/w_*) continue;;
+      *win32*|*dinput*|*xinput*|*wasapi*|*xaudio*|*asio*|*dsound*|*d3d*|*dxgi*|*wgl*|*uwp*|*winraw*|*_w.c|*/w_*)
+         if [ -n "$C89CC_WIN32" ]; then
+            cc89="$C89CC_WIN32"
+         else
+            echo "skip [c89]  $f (install gcc-mingw-w64-i686 to check it)"
+            continue
+         fi
+         ;;
+      *)
+         if grep -q '#include <windows\.h>' "$f"; then
+            [ -n "$C89CC_WIN32" ] || { echo "skip [c89]  $f (install gcc-mingw-w64-i686)"; continue; }
+            cc89="$C89CC_WIN32"
+         fi
+         ;;
    esac
-   err=$($C89CC $C89FLAGS "$f" 2>&1 | grep -E ' error: ' \
+   err=$($cc89 $C89FLAGS -Wno-overlength-strings "$f" 2>&1 | grep -E ' error: ' \
          | grep -vE 'error: [A-Za-z0-9_.-]+: No such file|error: [A-Za-z0-9_.-]+: file not found' | head -3)
    if [ -n "$err" ]; then
       echo "FAIL [c89]   $f"; echo "$err" | sed 's/^/     /'; fail=1
