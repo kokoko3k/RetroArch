@@ -163,7 +163,7 @@ static long compare(const char *mp4, const uint8_t *ref_a, size_t alen,
          frames++;
       }
    }
-   while (rh264_video_drain(h) == 1)
+   while (rh264_video_drain(h) == 0)
    {
       const uint8_t *p[3];
       int st[3], w[3], hh[3], k;
@@ -501,6 +501,12 @@ int main(void)
    lossless_case("med_cavlc", "testsrc2=s=96x80:r=10",   12, "-preset medium -x264-params cabac=0");
    lossless_case("mandel_med","mandelbrot=s=112x96:r=10", 8, "-preset medium");
    lossless_case("mandel_i",  "mandelbrot=s=112x96:r=10", 4, "-preset ultrafast -g 1");
+   /* Noise is cheaper raw than coded: x264 lossless makes every
+    * macroblock I_PCM, which under CABAC pins where the samples start
+    * relative to the arithmetic decoder's read position (the engine
+    * prefetches; the samples begin after the stop bit, byte aligned). */
+   lossless_case("pcm_cabac", "nullsrc=s=96x80:r=10,geq=lum='random(1)*255':cb='random(2)*255':cr='random(3)*255'",
+         2, "-preset medium -g 1");
    printf("deblocking across a bypass / lossy slice boundary (8.7.2.1):\n");
    mixed_case();
 

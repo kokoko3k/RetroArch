@@ -7426,12 +7426,21 @@ static int rh264_cabac_decode_mb_ctx(rh264_cabac *cb, const rh264_sps *sps,
       is_i16 = forced;
    if (is_i16) {
       if (rh264_cabac_terminate(cb)) {
-         /* I_PCM. The encoder flushed its arithmetic state and aligned, so
-          * the raw samples begin at the next byte boundary of what this
-          * engine has fetched: drop the current byte's remaining bits. The
-          * engine restarts behind the samples with its context variables
-          * kept (9.3.1.2). */
+         /* I_PCM.  The encoder's flush (9.3.4.5) wrote its low register
+          * and a stop bit; the decoder's nine-bit window ends one bit
+          * short of that stop bit, so the samples begin at the byte
+          * boundary after the bit following the engine's read position
+          * (7.3.5 pcm_alignment_zero_bit).  This engine prefetches: buf
+          * is up to three bytes past that position and bitcnt bits of it
+          * are unconsumed, so step back accordingly - restarting at buf
+          * itself skipped up to two sample bytes and desynchronised
+          * everything after the first I_PCM (x264 emits I_PCM in its
+          * lossless mode on noisy content).  The engine restarts behind
+          * the samples with its context variables kept (9.3.1.2). */
          int r, c2, k, ch = f->cmbh;
+         int back = cb->bitcnt - 1;
+         if (back >= 0) cb->buf -= back >> 3;
+         else           cb->buf += 1;
          cb->bitcnt = 0;
          if (cb->end - cb->buf < 256 + ch*8*2) return -1;
          for (r = 0; r < 16; r++) for (c2 = 0; c2 < 16; c2++)
