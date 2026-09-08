@@ -33,6 +33,7 @@
 
 #include "vksym.h"
 
+#include <stddef.h>
 #include <boolean.h>
 #include <retro_inline.h>
 #include <retro_common_api.h>
@@ -280,6 +281,12 @@ typedef struct gfx_ctx_vulkan_data
     * most of which never see vulkan_win32.h. Cast at the call site. */
    PFN_vkVoidFunction fse_acquire;
    PFN_vkVoidFunction fse_release;
+   /* VK_GOOGLE_display_timing, when the device has it: each present
+    * carries a present ID and the driver reports when it actually
+    * reached the display, on the platform's monotonic clock. */
+   PFN_vkVoidFunction display_timing_query;
+   uint32_t present_id;
+   bool display_timing_supported;
 #ifdef VULKAN_HDR_SWAPCHAIN
    /* Loaded from VK_EXT_hdr_metadata when that optional device extension is
     * present; NULL otherwise. Used to signal SMPTE-2086 mastering-display
@@ -377,6 +384,16 @@ bool vulkan_surface_create(gfx_ctx_vulkan_data_t *vk,
 bool vulkan_surface_destroy(gfx_ctx_vulkan_data_t *vk);
 
 void vulkan_present(gfx_ctx_vulkan_data_t *vk, unsigned index);
+
+retro_time_t vulkan_last_present_time(gfx_ctx_vulkan_data_t *vk);
+
+/* The context driver hands the video driver &data->vk.context and keeps
+ * the swapchain beside it; every context embeds gfx_ctx_vulkan_data_t
+ * that way, so the owner is recoverable from the pointer the driver
+ * holds. Used by the driver for the timing query, which needs the
+ * swapchain handle. */
+#define VULKAN_CTX_DATA_FROM_CONTEXT(ctx) \
+   ((gfx_ctx_vulkan_data_t*)((char*)(ctx) - offsetof(gfx_ctx_vulkan_data_t, context)))
 
 void vulkan_acquire_next_image(gfx_ctx_vulkan_data_t *vk);
 

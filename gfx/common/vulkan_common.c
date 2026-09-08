@@ -695,7 +695,10 @@ static const char *vulkan_device_extensions[]  = {
 static const char *vulkan_optional_device_extensions[] = {
    "VK_KHR_sampler_mirror_clamp_to_edge",
    "VK_EXT_full_screen_exclusive",
-   "VK_KHR_portability_subset"
+   "VK_KHR_portability_subset",
+   /* Display timestamps for the presenter's repeat cadence; absent on
+    * most Windows drivers, present on Android and Mesa. */
+   "VK_GOOGLE_display_timing"
 #ifdef VULKAN_HDR_SWAPCHAIN
    /* Lets the app signal SMPTE-2086 mastering-display metadata to the
     * compositor via vkSetHdrMetadataEXT. Optional: if absent (common on
@@ -976,6 +979,14 @@ static bool vulkan_context_init_device(gfx_ctx_vulkan_data_t *vk)
             break;
          }
       }
+      for (i = 0; i < enabled_device_extension_count; i++)
+      {
+         if (!strcmp(enabled_device_extensions[i], "VK_GOOGLE_display_timing"))
+         {
+            vk->display_timing_supported = true;
+            break;
+         }
+      }
 
 #ifdef VULKAN_HDR_SWAPCHAIN
       /* Note whether the extension was enabled; the actual entrypoint is
@@ -1041,6 +1052,11 @@ static bool vulkan_context_init_device(gfx_ctx_vulkan_data_t *vk)
       vk->fse_release = vkGetDeviceProcAddr(vk->context.device,
                "vkReleaseFullScreenExclusiveModeEXT");
    }
+   vk->display_timing_query = NULL;
+   vk->present_id           = 0;
+   if (vk->display_timing_supported)
+      vk->display_timing_query = vkGetDeviceProcAddr(vk->context.device,
+               "vkGetPastPresentationTimingGOOGLE");
 #endif
 
 #ifdef VULKAN_HDR_SWAPCHAIN
@@ -3249,9 +3265,35 @@ void vulkan_context_destroy(gfx_ctx_vulkan_data_t *vk,
 #endif
 }
 
+/* When the most recent present the driver has timed reached the display,
+ * in microseconds on the platform's monotonic clock - the clock
+ * cpu_features_get_time_usec() reads on the platforms that have this
+ * extension. 0 without the extension or before the first timed present. */
+retro_time_t vulkan_last_present_time(gfx_ctx_vulkan_data_t *vk)
+{
+   PFN_vkGetPastPresentationTimingGOOGLE query;
+   VkPastPresentationTimingGOOGLE timings[8];
+   uint32_t count = 8;
+   uint32_t i;
+   uint64_t latest = 0;
+
+   if (!vk || !vk->display_timing_supported || !vk->display_timing_query
+         || vk->swapchain == VK_NULL_HANDLE)
+      return 0;
+   query = (PFN_vkGetPastPresentationTimingGOOGLE)vk->display_timing_query;
+   if (query(vk->context.device, vk->swapchain, &count, timings) < 0)
+      return 0;
+   for (i = 0; i < count; i++)
+      if (timings[i].actualPresentTime > latest)
+         latest = timings[i].actualPresentTime;
+   return (retro_time_t)(latest / 1000);
+}
+
 void vulkan_present(gfx_ctx_vulkan_data_t *vk, unsigned index)
 {
    VkPresentInfoKHR present;
+   VkPresentTimesInfoGOOGLE times;
+   VkPresentTimeGOOGLE ptime;
    VkResult result                 = VK_SUCCESS;
    VkResult err                    = VK_SUCCESS;
 
@@ -3263,6 +3305,18 @@ void vulkan_present(gfx_ctx_vulkan_data_t *vk, unsigned index)
    present.pSwapchains             = &vk->swapchain;
    present.pImageIndices           = &index;
    present.pResults                = &result;
+
+   /* An ID per present, so the timing query below can name it. */
+   if (vk->display_timing_supported && vk->display_timing_query)
+   {
+      times.sType                = VK_STRUCTURE_TYPE_PRESENT_TIMES_INFO_GOOGLE;
+      times.pNext                = NULL;
+      times.swapchainCount       = 1;
+      times.pTimes               = &ptime;
+      ptime.presentID            = ++vk->present_id;
+      ptime.desiredPresentTime   = 0;
+      present.pNext              = &times;
+   }
 
    /* Better hope QueuePresent doesn't block D: */
 #ifdef HAVE_THREADS

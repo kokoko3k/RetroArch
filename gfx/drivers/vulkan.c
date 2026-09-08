@@ -6775,6 +6775,14 @@ static unsigned vulkan_present_last(void *data)
    return done;
 }
 
+static retro_time_t vulkan_get_last_present_time(void *data)
+{
+   vk_t *vk = (vk_t*)data;
+   if (!vk || !vk->context)
+      return 0;
+   return vulkan_last_present_time(VULKAN_CTX_DATA_FROM_CONTEXT(vk->context));
+}
+
 static void vulkan_inject_black_frame(vk_t *vk, video_frame_info_t *video_info)
 {
    VkSubmitInfo submit_info;
@@ -9268,7 +9276,7 @@ static const video_poke_interface_t vulkan_poke_interface = {
    vulkan_supports_texture_format,
    vulkan_load_texture_compressed,
    vulkan_present_last,
-   NULL  /* get_last_present_time */
+   vulkan_get_last_present_time
 };
 
 static void vulkan_get_poke_interface(void *data,
