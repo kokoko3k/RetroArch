@@ -200,25 +200,18 @@ typedef struct thread_video
    bool clamp_logged;
 
    slock_t *lock;
-   /* cond_cmd carries two distinct predicates - the command reply
-    * (pkt->type == reply_cmd) and ring progress (frame.pending /
-    * frame.busy changing) -
-    * and every signaller uses scond_signal(), which wakes exactly one
-    * waiter. There is no broadcast anywhere in the wrapper.
-    *
-    * That is only correct because at most one thread ever waits on
-    * cond_cmd: all four wait sites run on the user thread, and
-    * video_thread_wait_frame() bars the worker with a thread id check.
-    * Add a second waiter and a wake-one signal can wake the waiter
-    * whose predicate did not change; it re-tests, sleeps again, and the
-    * intended waiter is never woken. Only the frame pacing wait in
-    * video_thread_frame() is timed and would recover - the other three
-    * are unbounded scond_wait() and would hang.
-    *
-    * So: do not add a cond_cmd waiter without converting the signallers
-    * to scond_broadcast(), or splitting the predicates onto separate
-    * condition variables. cond_cmd_waiters checks this in debug builds. */
-   scond_t *cond_cmd;
+   /* cond_reply: the command reply (pkt->type == reply_cmd). One
+    * command is outstanding at a time (cmd_data is a single slot), so
+    * one waiter, woken with scond_signal(). Same-thread nesting is
+    * counted rather than rejected because the cocoa trampoline drained
+    * by video_thread_pump_wait() can re-enter the wrapper on the waiting
+    * thread; a second distinct thread is the case that breaks, and
+    * cond_reply_waiters checks for it in debug builds. */
+   scond_t *cond_reply;
+   /* cond_ring: ring progress (frame.pending / frame.busy changing),
+    * broadcast by the video thread when it claims or completes a slot.
+    * Any number of waiters, each re-testing its own predicate. */
+   scond_t *cond_ring;
    scond_t *cond_thread;
    sthread_t *thread;
 
@@ -315,16 +308,12 @@ typedef struct thread_video
 
    bool apply_state_changes;
 
-   /* Which thread is currently blocked on cond_cmd, and how deep, both
-    * guarded by lock. Used to check the single-waiter requirement noted
-    * on cond_cmd above. Maintained unconditionally so the struct layout
-    * does not depend on the build type; only asserted on in debug
-    * builds. Same-thread nesting is permitted and counted rather than
-    * rejected, because the cocoa trampoline drained by
-    * video_thread_pump_wait() can re-enter the wrapper on the waiting
-    * thread. A second distinct thread is the case that breaks. */
-   uintptr_t cond_cmd_waiter;
-   unsigned cond_cmd_waiters;
+   /* Which thread is currently blocked on cond_reply, and how deep,
+    * both guarded by lock; see the note on cond_reply. Maintained
+    * unconditionally so the struct layout does not depend on the build
+    * type; only asserted on in debug builds. */
+   uintptr_t cond_reply_waiter;
+   unsigned cond_reply_waiters;
 
    bool alive;
    bool focus;

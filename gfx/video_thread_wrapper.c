@@ -38,19 +38,20 @@
 
 #include <retro_assert.h>
 
-/* cond_cmd multiplexes two predicates over wake-one signals, which is
- * only correct while at most one thread waits on it. See the note on
- * cond_cmd in video_thread_wrapper.h. Every wait on cond_cmd must be
- * bracketed by these; thr->lock is held across the wait, so the counter
- * needs no atomics. */
+/* cond_reply is woken with scond_signal() and carries one command's
+ * reply, so at most one thread may wait on it; see the note in
+ * video_thread_wrapper.h. Every wait on cond_reply is bracketed by
+ * these; thr->lock is held across the wait, so the counter needs no
+ * atomics. Ring waits use cond_ring, which is broadcast, and need no
+ * bracket. */
 #ifdef DEBUG
 #define VIDEO_THREAD_CMD_WAIT_ENTER(thr) \
    do { \
       uintptr_t self_ = sthread_get_current_thread_id(); \
-      retro_assert(   (thr)->cond_cmd_waiters == 0 \
-                   || (thr)->cond_cmd_waiter  == self_); \
-      (thr)->cond_cmd_waiter = self_; \
-      (thr)->cond_cmd_waiters++; \
+      retro_assert(   (thr)->cond_reply_waiters == 0 \
+                   || (thr)->cond_reply_waiter  == self_); \
+      (thr)->cond_reply_waiter = self_; \
+      (thr)->cond_reply_waiters++; \
    } while (0)
 #else
 /* Release builds pay nothing; the fields exist unconditionally only so
@@ -59,7 +60,7 @@
 #endif
 #ifdef DEBUG
 #define VIDEO_THREAD_CMD_WAIT_LEAVE(thr) \
-   do { (thr)->cond_cmd_waiters--; } while (0)
+   do { (thr)->cond_reply_waiters--; } while (0)
 #else
 #define VIDEO_THREAD_CMD_WAIT_LEAVE(thr) do { } while (0)
 #endif
@@ -85,7 +86,7 @@ static void video_thread_reply(thread_video_t *thr, const thread_packet_t *pkt)
    thr->reply_cmd = pkt->type;
    thr->send_cmd  = CMD_VIDEO_NONE;
 
-   scond_signal(thr->cond_cmd);
+   scond_signal(thr->cond_reply);
    slock_unlock(thr->lock);
 }
 
@@ -158,8 +159,8 @@ static void video_thread_wait_reply(thread_video_t *thr, thread_packet_t *pkt)
 
    VIDEO_THREAD_CMD_WAIT_ENTER(thr);
    while (pkt->type != thr->reply_cmd)
-      if (!video_thread_pump_wait(thr->cond_cmd, thr->lock))
-         scond_wait(thr->cond_cmd, thr->lock);
+      if (!video_thread_pump_wait(thr->cond_reply, thr->lock))
+         scond_wait(thr->cond_reply, thr->lock);
    VIDEO_THREAD_CMD_WAIT_LEAVE(thr);
 
    *pkt               = thr->cmd_data;
@@ -593,6 +594,10 @@ static void video_thread_loop(void *data)
          thr->frame.tail    = slot ^ 1;
          thr->frame.pending--;
          thr->frame.busy    = true;
+         /* The paced wait in video_thread_frame() blocks on pending
+          * dropping, which just happened; tell it now rather than a
+          * whole render later at completion. */
+         scond_broadcast(thr->cond_ring);
       }
 
       /* To avoid race condition where send_cmd is updated
@@ -725,7 +730,7 @@ static void video_thread_loop(void *data)
          video_state_get_ptr()->swap_count += presents;
          thr->driver_refresh_rate = refresh_rate;
          thr->frame.busy    = false;
-         scond_signal(thr->cond_cmd);
+         scond_broadcast(thr->cond_ring);
          slock_unlock(thr->lock);
       }
       else if (repeat_due)
@@ -862,7 +867,6 @@ static bool video_thread_frame(void *data, const void *frame_,
       /* Pace against the worker claiming the previous frame, not
        * finishing it: the copy below then overlaps that render.
        * Ideally, use absolute time, but that is only a good idea on POSIX. */
-      VIDEO_THREAD_CMD_WAIT_ENTER(thr);
       while (thr->frame.pending)
       {
          retro_time_t current = cpu_features_get_time_usec();
@@ -871,10 +875,9 @@ static bool video_thread_frame(void *data, const void *frame_,
          if (delta <= 0)
             break;
 
-         if (!scond_wait_timeout(thr->cond_cmd, thr->lock, delta))
+         if (!scond_wait_timeout(thr->cond_ring, thr->lock, delta))
             break;
       }
-      VIDEO_THREAD_CMD_WAIT_LEAVE(thr);
    }
 
    /* Pick the slot to fill. The worker renders tail ^ 1 while busy and
@@ -967,13 +970,11 @@ static bool video_thread_frame(void *data, const void *frame_,
        * frame-pacing wait above needs no such treatment: it breaks after
        * at most one frame period and the main runloop then drains common
        * modes. */
-      VIDEO_THREAD_CMD_WAIT_ENTER(thr);
       do
       {
-         if (!video_thread_pump_wait(thr->cond_cmd, thr->lock))
-            scond_wait(thr->cond_cmd, thr->lock);
+         if (!video_thread_pump_wait(thr->cond_ring, thr->lock))
+            scond_wait(thr->cond_ring, thr->lock);
       } while (thr->frame.pending || thr->frame.busy);
-      VIDEO_THREAD_CMD_WAIT_LEAVE(thr);
    }
 #endif
    if (!dropped)
@@ -1018,7 +1019,9 @@ static bool video_thread_init(thread_video_t *thr,
       return false;
    if (!(thr->frame.lock  = slock_new()))
       return false;
-   if (!(thr->cond_cmd    = scond_new()))
+   if (!(thr->cond_reply  = scond_new()))
+      return false;
+   if (!(thr->cond_ring   = scond_new()))
       return false;
    if (!(thr->cond_thread = scond_new()))
       return false;
@@ -1205,7 +1208,8 @@ static void video_thread_free(void *data)
       slock_free(thr->frame.lock);
       slock_free(thr->alpha_lock);
       slock_free(thr->lock);
-      scond_free(thr->cond_cmd);
+      scond_free(thr->cond_reply);
+      scond_free(thr->cond_ring);
       scond_free(thr->cond_thread);
 
       RARCH_LOG(
@@ -2030,9 +2034,7 @@ void video_thread_wait_idle(void)
       return;
 
    slock_lock(thr->lock);
-   VIDEO_THREAD_CMD_WAIT_ENTER(thr);
    while (thr->frame.pending || thr->frame.busy)
-      scond_wait(thr->cond_cmd, thr->lock);
-   VIDEO_THREAD_CMD_WAIT_LEAVE(thr);
+      scond_wait(thr->cond_ring, thr->lock);
    slock_unlock(thr->lock);
 }

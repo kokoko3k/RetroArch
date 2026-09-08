@@ -42,6 +42,7 @@
 
 #include <time/rtime.h>
 #include <retro_timers.h>
+#include <rthreads/rthreads.h>
 #include <file/config_file.h>
 
 static unsigned failures = 0;
@@ -462,6 +463,74 @@ static void lane_every_command_replies(void)
 }
 
 /* ------------------------------------------------------------------ */
+/* Lane: a second ring waiter                                        */
+/*   Ring progress is broadcast, so another thread may block in      */
+/*   video_thread_wait_idle() while the main thread paces on the     */
+/*   ring and drains it for the menu. Neither may starve.            */
+/* ------------------------------------------------------------------ */
+
+static slock_t *idle_lock;
+static int idle_stop;
+static unsigned idle_waits;
+static void idle_waiter(void *p)
+{
+   (void)p;
+   for (;;)
+   {
+      bool stop;
+      slock_lock(idle_lock);
+      stop = idle_stop != 0;
+      slock_unlock(idle_lock);
+      if (stop)
+         break;
+      video_thread_wait_idle();
+      slock_lock(idle_lock);
+      idle_waits++;
+      slock_unlock(idle_lock);
+      retro_sleep(1);
+   }
+}
+
+static void lane_second_ring_waiter(void)
+{
+   unsigned had = failures;
+   sthread_t *t;
+   unsigned last_hits = 0;
+
+   set_threaded_via_setting(true);
+   run_frames(5);
+   expect_wrapper(true, "second waiter");
+   wrapper_frames_since(&last_hits);
+
+   idle_lock  = slock_new();
+   idle_stop  = 0;
+   idle_waits = 0;
+   t = sthread_create(idle_waiter, NULL);
+   CHECK(t != NULL, "could not start waiter thread");
+
+   /* In game (paced ring wait on main) and in menu (drain wait). */
+   command_event(CMD_EVENT_MENU_TOGGLE, NULL);
+   run_frames(60);
+   command_event(CMD_EVENT_MENU_TOGGLE, NULL);
+   run_frames(60);
+
+   slock_lock(idle_lock);
+   idle_stop = 1;
+   slock_unlock(idle_lock);
+   if (t)
+      sthread_join(t);
+   slock_free(idle_lock);
+   CHECK(idle_waits > 0, "waiter thread never got through wait_idle");
+   CHECK(wrapper_frames_since(&last_hits) > 0,
+         "worker stopped consuming with a second ring waiter");
+
+   set_threaded_via_setting(false);
+
+   if (failures == had)
+      fprintf(stderr, "[pass] second-ring-waiter lane (%u idle waits)\n", idle_waits);
+}
+
+/* ------------------------------------------------------------------ */
 
 int main(int argc, char *argv[])
 {
@@ -545,6 +614,7 @@ int main(int argc, char *argv[])
    lane_swap_count();
    lane_present_repeat();
    lane_every_command_replies();
+   lane_second_ring_waiter();
 
    /* Orderly shutdown: the teardown barriers are part of what is
     * under test. */
