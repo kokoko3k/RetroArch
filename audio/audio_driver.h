@@ -330,6 +330,7 @@ typedef struct
 {
    double   offered;                   /* sink_offered */
    uint64_t consumed;                  /* frames_consumed() */
+   double   pipe;                      /* what the pipe ring held, in nominal device frames */
 } audio_sink_mark_t;
 
 /* A sum of windows: their time, and what the source and the device did. */
@@ -630,6 +631,13 @@ typedef struct
    int64_t  sink_window_at;            /* usec; when the open window closes */
    int64_t  sink_apply_at;             /* usec; the next setting of the bias */
    audio_sink_mark_t sink_at_window;   /* the counts when the open window opened */
+   /* The last windows' time and source count, for the source's band:
+    * a window closes at a publish, so its length carries that publish's
+    * lateness - a frame of the core's run time - which the next window
+    * carries back. Over a few windows it cancels; a stall does not. */
+   int64_t  sink_recent_usec[4];
+   double   sink_recent_offered[4];
+   unsigned sink_recent_head;
    audio_sink_sum_t  sink_kept;        /* the windows summed for the bias */
    audio_sink_sum_t  sink_pending;     /* windows since the last kept one, for the rates shown meanwhile */
    unsigned sink_settled;              /* kept windows in a row, up to 2, after which the sums stand */

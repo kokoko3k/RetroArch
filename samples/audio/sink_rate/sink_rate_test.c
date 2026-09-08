@@ -76,6 +76,21 @@ static void run_usec(audio_driver_state_t *st, int64_t usec)
    audio_driver_sink_update(st, clock_usec);
 }
 static void run_second(audio_driver_state_t *st) { run_usec(st, 1000000); }
+
+/* A second's worth of publishes - the count of one second - arriving
+ * @late_usec after the second is up: the source produced at rate, the
+ * publish that closes the window was late. */
+static void run_second_late(audio_driver_state_t *st, int64_t late_usec)
+{
+   double ratio   = st->src_ratio_curr / st->src_ratio_orig;
+   double offered = 48000.0 * ratio * (1.0 + src_ppm / 1e6);
+   clock_usec           += 1000000 + late_usec;
+   st->sink_offered_raw += (uint64_t)offered;
+   st->sink_offered     += offered / ratio;
+   st->sink_accepted    += (uint64_t)offered;
+   audio_driver_sink_refused(st);
+   audio_driver_sink_update(st, clock_usec);
+}
 static void run_seconds(audio_driver_state_t *st, int n)
 {
    int i;
@@ -322,6 +337,32 @@ static void s_slow_start(audio_driver_state_t *st)
    CHECK(fabs(src_meas_ppm(st)) < 100.0, "the shown source still carries the warm-up: %+.0f ppm", src_meas_ppm(st));
 }
 
+/* A window closes at a publish, and the closing publish is late by
+ * the core's run time - here 6 ms one window, 0 the next, so windows
+ * read alternately -1500 and +1500 ppm on their own. Judged one at a
+ * time none would be kept and the estimate would never settle; the
+ * lateness cancels over the horizon, and the bias finds the device. */
+static void s_closing_jitter(audio_driver_state_t *st)
+{
+   int i;
+   reset(st, false);
+   dev_ppm = 90.0;
+   for (i = 0; i < 300; i++)
+   {
+      /* One window in two closes 6 ms late - its span gains 6 ms - and
+       * the next closes on time, its span 6 ms short. */
+      if (i % 8 == 3)
+         run_second_late(st, 6000);
+      else if (i % 8 == 7)
+         run_second_late(st, -6000);
+      else
+         run_second(st);
+   }
+   printf("      bias %+.0f ppm, applied %u times\n", bias_ppm(st), st->sink_applied);
+   CHECK(st->sink_applied > 0, "with a jittering close the estimate never settled");
+   CHECK(fabs(bias_ppm(st) - 90.0) < 60.0, "bias %+.0f ppm, expected +90", bias_ppm(st));
+}
+
 /* --- the threaded pipeline ---------------------------------------------- */
 
 /* On the threaded pipeline the source is counted where it is exact:
@@ -498,6 +539,7 @@ static const scenario_t scenarios[] = {
    { "the core pausing half a second every ten",           s_core_pauses },
    { "the main thread stalling 50 ms every two minutes",   s_main_thread_stalls },
    { "the device frozen for a window",                     s_device_stall },
+   { "the closing publish late by a few milliseconds",     s_closing_jitter },
    { "a slow start, then nominal",                         s_slow_start },
    { "publishes counted at the producer",                  s_publishes },
    { "a blocking writer",                                  s_blocking_writer },

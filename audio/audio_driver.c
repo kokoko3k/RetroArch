@@ -853,12 +853,20 @@ static double audio_driver_compute_rate_adjust(audio_driver_state_t *audio_st)
  * The windows close on the thread that counts the source: after each
  * write on the frame-synchronous path, after each publish on the
  * threaded pipeline, where the count is what entered the ring - whole
- * publishes, with neither the ring nor what it refused in the
- * measure. Closed on the consumer instead, a window held a fraction
- * of a burst either way, thousands of parts per million of phase
- * noise against a band of five hundred. */
+ * publishes, less the change in what the ring holds - what it holds
+ * is offered but still ahead of the device - and with nothing it
+ * refused in the measure. Closed on the consumer instead, a window
+ * held a fraction of a burst either way, thousands of parts per
+ * million of phase noise against a band of five hundred. */
 #define AUDIO_SINK_BIAS_PLAUSIBLE   0.0005
 #define AUDIO_SINK_DEVICE_BAND      0.02
+/* A window's own source band - a few milliseconds of the closing
+ * publish's lateness in a window of seconds - and the windows before
+ * the current one over which the band a bias could correct is judged. */
+#ifndef AUDIO_SINK_WINDOW_BAND
+#define AUDIO_SINK_WINDOW_BAND      0.002
+#endif
+#define AUDIO_SINK_BAND_WINDOWS     4
 /* Overridable so a harness running in real time can run them short. */
 #ifndef AUDIO_SINK_BASELINE_USEC
 #define AUDIO_SINK_BASELINE_USEC    30000000
@@ -875,11 +883,24 @@ enum
    AUDIO_SINK_WARNED_UNSETTLED   = 1 << 3
 };
 
+/* What the pipe ring holds, in nominal device frames; 0 off the
+ * threaded pipeline. Read on the producer's side of the ring. */
+static double audio_driver_sink_pipe_frames(audio_driver_state_t *audio_st)
+{
+#ifdef HAVE_THREADS
+   if (audio_st->pipe_threaded)
+      return (double)retro_spsc_read_avail(&audio_st->pipe_ring)
+            / (2 * sizeof(int16_t)) * audio_st->src_ratio_orig;
+#endif
+   return 0.0;
+}
+
 static void audio_driver_sink_mark(audio_driver_state_t *audio_st,
       audio_sink_mark_t *m, uint64_t consumed)
 {
    m->offered  = audio_st->sink_offered;
    m->consumed = consumed;
+   m->pipe     = audio_driver_sink_pipe_frames(audio_st);
 }
 
 static INLINE double audio_driver_sink_ppm(double count, double nominal)
@@ -912,7 +933,13 @@ static void audio_driver_sink_window(audio_driver_state_t *audio_st,
    audio_sink_mark_t *at = &audio_st->sink_at_window;
    int64_t  wdt      = now_usec - (audio_st->sink_window_at - AUDIO_SINK_WINDOW_USEC);
    double   nominal  = (double)rate * (double)wdt / 1e6;
-   double   offered  = audio_st->sink_offered - at->offered;
+   /* The source's count is what entered the pipe less what the pipe
+    * took in over the window: what it holds now was offered but is
+    * still ahead of the device, and what it gave up was offered
+    * earlier. The pipe primed to its target would otherwise read as a
+    * source slow by that much for the whole baseline. */
+   double   pipe_now = audio_driver_sink_pipe_frames(audio_st);
+   double   offered  = audio_st->sink_offered - at->offered - (pipe_now - at->pipe);
    double   taken    = consumed >= at->consumed ? (double)(consumed - at->consumed) : 0.0;
    bool     kept;
 
@@ -921,8 +948,31 @@ static void audio_driver_sink_window(audio_driver_state_t *audio_st,
    if (nominal <= 0.0)
       return;
 
+   /* The source's band, in two parts. The window on its own must be
+    * within AUDIO_SINK_WINDOW_BAND: a stall of tens of milliseconds
+    * is a percent or more of a window and is out, while the lateness
+    * of the closing publish - a few milliseconds of the core's run
+    * time, which the next window carries back - is not. Windows that
+    * pass are then judged together with the last few: the sum must be
+    * within the band a bias could correct, the lateness having
+    * cancelled over them. */
    kept = fabs(taken / nominal - 1.0)   <= AUDIO_SINK_DEVICE_BAND
-       && fabs(offered / nominal - 1.0) <= AUDIO_SINK_BIAS_PLAUSIBLE;
+       && fabs(offered / nominal - 1.0) <= AUDIO_SINK_WINDOW_BAND;
+   if (kept)
+   {
+      int64_t  span = wdt;
+      double   sum  = offered;
+      unsigned i;
+      for (i = 0; i < AUDIO_SINK_BAND_WINDOWS; i++)
+      {
+         span += audio_st->sink_recent_usec[i];
+         sum  += audio_st->sink_recent_offered[i];
+      }
+      audio_st->sink_recent_usec[audio_st->sink_recent_head]    = wdt;
+      audio_st->sink_recent_offered[audio_st->sink_recent_head] = offered;
+      audio_st->sink_recent_head = (audio_st->sink_recent_head + 1) % AUDIO_SINK_BAND_WINDOWS;
+      kept = fabs(sum / ((double)rate * (double)span / 1e6) - 1.0) <= AUDIO_SINK_BIAS_PLAUSIBLE;
+   }
 
    if (kept)
    {
@@ -1101,6 +1151,9 @@ static void audio_driver_sink_update(audio_driver_state_t *audio_st,
       audio_st->sink_discarded = 0;
       memset(&audio_st->sink_kept,    0, sizeof(audio_st->sink_kept));
       memset(&audio_st->sink_pending, 0, sizeof(audio_st->sink_pending));
+      memset(audio_st->sink_recent_usec,    0, sizeof(audio_st->sink_recent_usec));
+      memset(audio_st->sink_recent_offered, 0, sizeof(audio_st->sink_recent_offered));
+      audio_st->sink_recent_head = 0;
       audio_driver_sink_mark(audio_st, &audio_st->sink_at_window, consumed);
       return;
    }

@@ -39,10 +39,16 @@
 #include <boolean.h>
 #include <retro_atomic.h>
 
-/* The sink estimate runs short here - windows of 0.4 s, a baseline of
- * 3 s - so a seven-second real-time run reaches an application. */
-#define AUDIO_SINK_WINDOW_USEC     400000
+/* The sink estimate runs short here - windows of 1 s, a baseline of
+ * 3 s - so a run of some fifteen seconds reaches an application with
+ * room for windows a loaded runner throws out. */
+#define AUDIO_SINK_WINDOW_USEC    1000000
 #define AUDIO_SINK_BASELINE_USEC  3000000
+/* A window's own band is a few milliseconds of the closing publish's
+ * lateness: 0.2% of the real 4 s window, so 0.8% of this one - the
+ * same 8 ms, which a sanitizer's runner needs and a 60 ms stall is
+ * still well outside. */
+#define AUDIO_SINK_WINDOW_BAND    0.008
 #include "../../../audio/audio_driver.c"
 
 static unsigned failures = 0;
@@ -266,7 +272,17 @@ static int16_t frame_audio[800 * 2];
 int main(int argc, char **argv)
 {
    pthread_t cons;
-   unsigned  i, frames = 420, warm = 240;
+   unsigned  i, frames = 960, warm = 240;
+   /* Under a sanitizer the publishes land late by more, and more of the
+    * estimate's windows are left out for it: twice the run, so it still
+    * settles within it. */
+#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
+   frames = 1920;
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer)
+   frames = 1920;
+#endif
+#endif
    if (argc > 1)
       frames = (unsigned)atoi(argv[1]) * 60;
    if (argc > 2)
@@ -389,9 +405,11 @@ int main(int argc, char **argv)
     * about nothing. Closed on the consumer it never settled - a window
     * held a fraction of a burst, thousands of ppm of phase noise - and
     * the bias stayed at zero for the session. */
-   printf("   sink estimate: applied %u time(s), bias %+.0f ppm, source shown at %+.0f ppm\n",
+   printf("   sink estimate: applied %u time(s), bias %+.0f ppm, source shown at %+.0f ppm; %.0f s summed, settled %u, %u left out in a row\n",
          audio_driver_st.sink_applied, (audio_driver_st.sink_bias - 1.0) * 1e6,
-         (audio_driver_st.sink_source_hz / 48000.0 - 1.0) * 1e6);
+         (audio_driver_st.sink_source_hz / 48000.0 - 1.0) * 1e6,
+         (double)audio_driver_st.sink_kept.usec / 1e6, audio_driver_st.sink_settled,
+         audio_driver_st.sink_discarded);
    if (!jitter)
       CHECK(audio_driver_st.sink_applied > 0, "the sink estimate never settled on the threaded pipeline");
    /* Within the device's period over the short baseline: 96 frames in
