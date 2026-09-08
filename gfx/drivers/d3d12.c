@@ -305,6 +305,15 @@ typedef struct
       HANDLE                      frameLatencyWaitableObject;
       DXGISwapChain               handle;
       D3D12Resource               renderTargets[2];
+      /* Copy of the last presented backbuffer, taken before the present
+       * of a frame() that asked for it (retain_output), kept in
+       * COPY_SOURCE between uses, and the group that frame put on
+       * screen for present_last() to replay. */
+      D3D12Resource               retained;
+      unsigned                    retained_width;
+      unsigned                    retained_height;
+      unsigned                    retained_light;
+      unsigned                    retained_dark;
 #ifdef HAVE_DXGI_HDR
       d3d12_texture_t             back_buffer;
       DXGI_FORMAT                 current_rt_format;
@@ -3730,6 +3739,8 @@ static void d3d12_gfx_free(void* data)
 
    if (d3d12->flags & D3D12_ST_FLAG_WAITABLE_SWAPCHAINS)
       CloseHandle(d3d12->chain.frameLatencyWaitableObject);
+   Release(d3d12->chain.retained);
+   d3d12->chain.retained = NULL;
 
 
 #ifdef HAVE_OVERLAY
@@ -4857,6 +4868,177 @@ static void d3d12_init_render_targets(d3d12_video_t* d3d12, unsigned width, unsi
    }
 
    d3d12->flags &= ~D3D12_ST_FLAG_RESIZE_RTS;
+}
+
+static void dx12_inject_black_frame(d3d12_video_t* d3d12);
+
+/* Records a copy of the backbuffer (in PRESENT) into the retained
+ * texture, creating that texture to the swapchain's size and format
+ * when it does not match. Left in COPY_SOURCE for present_last(). The
+ * desc comes from the swapchain, not ID3D12Resource::GetDesc, which the
+ * C vtable declares struct-by-value and mingw cannot call as declared. */
+static void d3d12_retain_backbuffer(d3d12_video_t *d3d12,
+      D3D12GraphicsCommandList cmd)
+{
+   DXGI_SWAP_CHAIN_DESC1 sc;
+   D3D12Resource backbuffer = d3d12->chain.renderTargets[d3d12->chain.frame_index];
+
+   if (!backbuffer)
+      return;
+   if (FAILED(d3d12->chain.handle->lpVtbl->GetDesc1(d3d12->chain.handle, &sc)))
+      return;
+
+   if (     !d3d12->chain.retained
+         || d3d12->chain.retained_width  != sc.Width
+         || d3d12->chain.retained_height != sc.Height)
+   {
+      D3D12_HEAP_PROPERTIES heap_props;
+      D3D12_RESOURCE_DESC   desc;
+
+      Release(d3d12->chain.retained);
+      d3d12->chain.retained = NULL;
+
+      heap_props.Type                 = D3D12_HEAP_TYPE_DEFAULT;
+      heap_props.CPUPageProperty      = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+      heap_props.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
+      heap_props.CreationNodeMask     = 1;
+      heap_props.VisibleNodeMask      = 1;
+
+      desc.Dimension          = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+      desc.Alignment          = 0;
+      desc.Width              = sc.Width;
+      desc.Height             = sc.Height;
+      desc.DepthOrArraySize   = 1;
+      desc.MipLevels          = 1;
+      desc.Format             = sc.Format;
+      desc.SampleDesc.Count   = 1;
+      desc.SampleDesc.Quality = 0;
+      desc.Layout             = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+      desc.Flags              = D3D12_RESOURCE_FLAG_NONE;
+
+      /* Created in COPY_DEST: the transition below expects it there. */
+      if (FAILED(d3d12->device->lpVtbl->CreateCommittedResource(
+                  d3d12->device, &heap_props, D3D12_HEAP_FLAG_NONE, &desc,
+                  D3D12_RESOURCE_STATE_COPY_DEST, NULL,
+                  uuidof(ID3D12Resource), (void**)&d3d12->chain.retained)))
+      {
+         d3d12->chain.retained = NULL;
+         return;
+      }
+      d3d12->chain.retained_width  = sc.Width;
+      d3d12->chain.retained_height = sc.Height;
+   }
+   else
+      D3D12_RESOURCE_TRANSITION(cmd, d3d12->chain.retained,
+            D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
+
+   D3D12_RESOURCE_TRANSITION(cmd, backbuffer,
+         D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_SOURCE);
+   cmd->lpVtbl->CopyResource(cmd, d3d12->chain.retained, backbuffer);
+   D3D12_RESOURCE_TRANSITION(cmd, backbuffer,
+         D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_PRESENT);
+   D3D12_RESOURCE_TRANSITION(cmd, d3d12->chain.retained,
+         D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COPY_SOURCE);
+}
+
+/* One swap of the retained image: the same list dx12_inject_black_frame()
+ * records, with a copy where the clear is. */
+static bool d3d12_present_retained_once(d3d12_video_t *d3d12)
+{
+   D3D12GraphicsCommandList cmd = d3d12->queue.cmd;
+   D3D12Resource backbuffer;
+
+   {
+      D3D12Fence fence = d3d12->queue.fence;
+      d3d12->queue.handle->lpVtbl->Signal(d3d12->queue.handle, fence, ++d3d12->queue.fenceValue);
+      if (fence->lpVtbl->GetCompletedValue(fence) < d3d12->queue.fenceValue)
+      {
+         fence->lpVtbl->SetEventOnCompletion(fence, d3d12->queue.fenceValue, d3d12->queue.fenceEvent);
+         WaitForSingleObject(d3d12->queue.fenceEvent, INFINITE);
+      }
+   }
+
+   if (d3d12->flags & D3D12_ST_FLAG_WAITABLE_SWAPCHAINS)
+      WaitForSingleObjectEx(d3d12->chain.frameLatencyWaitableObject, 1000, true);
+
+   d3d12->queue.allocator->lpVtbl->Reset(d3d12->queue.allocator);
+   cmd->lpVtbl->Reset(cmd, d3d12->queue.allocator,
+         d3d12->pipes[VIDEO_SHADER_STOCK_BLEND]);
+
+   d3d12->chain.frame_index = DXGIGetCurrentBackBufferIndex(d3d12->chain.handle);
+   backbuffer = d3d12->chain.renderTargets[d3d12->chain.frame_index];
+   if (!backbuffer)
+   {
+      cmd->lpVtbl->Close(cmd);
+      return false;
+   }
+
+   D3D12_RESOURCE_TRANSITION(cmd, backbuffer,
+         D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_DEST);
+   cmd->lpVtbl->CopyResource(cmd, backbuffer, d3d12->chain.retained);
+   D3D12_RESOURCE_TRANSITION(cmd, backbuffer,
+         D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT);
+
+   cmd->lpVtbl->Close(cmd);
+   d3d12->queue.handle->lpVtbl->ExecuteCommandLists(d3d12->queue.handle, 1,
+         (ID3D12CommandList* const*)&d3d12->queue.cmd);
+   DXGIPresent(d3d12->chain.handle, d3d12->chain.swap_interval, 0);
+   return true;
+}
+
+/* Replays the group the retaining frame made: its light presents, then
+ * its dark ones, so BFI keeps its strobe pattern through a repeat. */
+static unsigned d3d12_present_last(void *data)
+{
+   unsigned i;
+   unsigned done        = 0;
+   d3d12_video_t *d3d12 = (d3d12_video_t*)data;
+   DXGI_SWAP_CHAIN_DESC1 sc;
+
+   if (!d3d12 || !d3d12->chain.retained || !d3d12->chain.handle)
+      return 0;
+   if (FAILED(d3d12->chain.handle->lpVtbl->GetDesc1(d3d12->chain.handle, &sc)))
+      return 0;
+   if (     sc.Width  != d3d12->chain.retained_width
+         || sc.Height != d3d12->chain.retained_height)
+      return 0;
+
+   for (i = 0; i < d3d12->chain.retained_light; i++)
+   {
+      if (!d3d12_present_retained_once(d3d12))
+         return done;
+      done++;
+   }
+   for (i = 0; i < d3d12->chain.retained_dark; i++)
+   {
+      if (d3d12->flags & D3D12_ST_FLAG_WAITABLE_SWAPCHAINS)
+         WaitForSingleObjectEx(d3d12->chain.frameLatencyWaitableObject, 1000, true);
+      dx12_inject_black_frame(d3d12);
+      done++;
+   }
+   return done;
+}
+
+/* The display timestamp of the most recent present, from DXGI's frame
+ * statistics, on the QPC clock cpu_features_get_time_usec() keeps on
+ * Windows. 0 when the swapchain cannot say. */
+static retro_time_t d3d12_get_last_present_time(void *data)
+{
+   DXGI_FRAME_STATISTICS stats;
+   static LARGE_INTEGER freq;
+   d3d12_video_t *d3d12 = (d3d12_video_t*)data;
+
+   if (!d3d12 || !d3d12->chain.handle)
+      return 0;
+   if (FAILED(d3d12->chain.handle->lpVtbl->GetFrameStatistics(
+               d3d12->chain.handle, &stats)))
+      return 0;
+   if (!stats.SyncQPCTime.QuadPart)
+      return 0;
+   if (!freq.QuadPart && !QueryPerformanceFrequency(&freq))
+      return 0;
+   return (stats.SyncQPCTime.QuadPart / freq.QuadPart * 1000000)
+        + (stats.SyncQPCTime.QuadPart % freq.QuadPart * 1000000 / freq.QuadPart);
 }
 
 static void dx12_inject_black_frame(d3d12_video_t* d3d12)
@@ -6285,6 +6467,17 @@ static bool d3d12_gfx_frame(
          D3D12_RESOURCE_STATE_RENDER_TARGET,
          D3D12_RESOURCE_STATE_PRESENT);
 
+   /* Recorded into this frame's list, so it executes with it. Not
+    * from the BFI light dupes, which recurse in here with the dupe
+    * lock held and would only copy the same image again. */
+   if (     video_info->retain_output
+         && !(d3d12->flags & D3D12_ST_FLAG_FRAME_DUPE_LOCK))
+   {
+      d3d12_retain_backbuffer(d3d12, cmd);
+      d3d12->chain.retained_light = 1;
+      d3d12->chain.retained_dark  = 0;
+   }
+
    cmd->lpVtbl->Close(cmd);
    d3d12->queue.handle->lpVtbl->ExecuteCommandLists(d3d12->queue.handle, 1,
          (ID3D12CommandList* const*)&d3d12->queue.cmd);
@@ -6337,6 +6530,15 @@ static bool d3d12_gfx_frame(
          {
             dx12_inject_black_frame(d3d12);
          }
+      }
+
+      /* The group this frame made, for present_last() to replay. */
+      if (     video_info->retain_output
+            && !(d3d12->flags & D3D12_ST_FLAG_FRAME_DUPE_LOCK))
+      {
+         d3d12->chain.retained_light = 1 + (video_info->black_frame_insertion
+               - video_info->bfi_dark_frames);
+         d3d12->chain.retained_dark  = video_info->bfi_dark_frames;
       }
    }
 
@@ -7997,7 +8199,9 @@ static const video_poke_interface_t d3d12_poke_interface = {
    NULL, /* set_hdr_subpixel_layout */
 #endif
    d3d12_gfx_supports_texture_format,
-   d3d12_gfx_load_texture_compressed
+   d3d12_gfx_load_texture_compressed,
+   d3d12_present_last,
+   d3d12_get_last_present_time
 };
 
 static void d3d12_gfx_get_poke_interface(void* data, const video_poke_interface_t** iface)
