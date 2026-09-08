@@ -895,12 +895,31 @@ static double audio_driver_sink_pipe_frames(audio_driver_state_t *audio_st)
    return 0.0;
 }
 
+/* What the device's buffer holds, in device frames: its size less its
+ * free space; 0 where the driver reports neither. */
+static double audio_driver_sink_device_frames(audio_driver_state_t *audio_st)
+{
+   const audio_driver_t *audio = audio_st->current_audio;
+   size_t frame_bytes;
+   if (!audio || !audio->write_avail || !audio_st->buffer_size || !audio_st->context_audio_data)
+      return 0.0;
+   frame_bytes = (AUDIO_FLAGS_GET(audio_st) & AUDIO_FLAG_USE_FLOAT)
+         ? 2 * sizeof(float) : 2 * sizeof(int16_t);
+   {
+      size_t avail = audio->write_avail(audio_st->context_audio_data);
+      if (avail > audio_st->buffer_size)
+         avail = audio_st->buffer_size;
+      return (double)(audio_st->buffer_size - avail) / (double)frame_bytes;
+   }
+}
+
 static void audio_driver_sink_mark(audio_driver_state_t *audio_st,
       audio_sink_mark_t *m, uint64_t consumed)
 {
    m->offered  = audio_st->sink_offered;
    m->consumed = consumed;
    m->pipe     = audio_driver_sink_pipe_frames(audio_st);
+   m->device   = audio_driver_sink_device_frames(audio_st);
 }
 
 static INLINE double audio_driver_sink_ppm(double count, double nominal)
@@ -933,13 +952,17 @@ static void audio_driver_sink_window(audio_driver_state_t *audio_st,
    audio_sink_mark_t *at = &audio_st->sink_at_window;
    int64_t  wdt      = now_usec - (audio_st->sink_window_at - AUDIO_SINK_WINDOW_USEC);
    double   nominal  = (double)rate * (double)wdt / 1e6;
-   /* The source's count is what entered the pipe less what the pipe
-    * took in over the window: what it holds now was offered but is
-    * still ahead of the device, and what it gave up was offered
-    * earlier. The pipe primed to its target would otherwise read as a
-    * source slow by that much for the whole baseline. */
+   /* The source's count is what was offered less what the pipe and
+    * the device's buffer took in over the window: what they hold now
+    * was offered but is not yet consumed, and what they gave up was
+    * offered earlier. Otherwise the pipe primed to its target and the
+    * device filled from empty read as a source slow by that much for
+    * the whole baseline - a 64 ms buffer, 2000 ppm over thirty
+    * seconds, refused. */
    double   pipe_now = audio_driver_sink_pipe_frames(audio_st);
-   double   offered  = audio_st->sink_offered - at->offered - (pipe_now - at->pipe);
+   double   dev_now  = audio_driver_sink_device_frames(audio_st);
+   double   offered  = audio_st->sink_offered - at->offered
+         - (pipe_now - at->pipe) - (dev_now - at->device);
    double   taken    = consumed >= at->consumed ? (double)(consumed - at->consumed) : 0.0;
    bool     kept;
 

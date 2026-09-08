@@ -331,6 +331,7 @@ typedef struct
    double   offered;                   /* sink_offered */
    uint64_t consumed;                  /* frames_consumed() */
    double   pipe;                      /* what the pipe ring held, in nominal device frames */
+   double   device;                    /* what the device's buffer held, in device frames */
 } audio_sink_mark_t;
 
 /* A sum of windows: their time, and what the source and the device did. */

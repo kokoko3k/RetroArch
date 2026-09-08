@@ -208,8 +208,8 @@ jobs:
           # the consumer's chunks are whole publishes and the pipe's fill
           # swings by one with the phase; nothing is dropped from a steady
           # core at any phase.
-          ASAN_OPTIONS=detect_leaks=0 timeout 120 ./pipeline_rate_control_test 12 4 big
-          ASAN_OPTIONS=detect_leaks=0 timeout 120 ./pipeline_rate_control_test 12 4 big-jitter
+          ASAN_OPTIONS=detect_leaks=0 timeout 120 ./pipeline_rate_control_test 16 4 big
+          ASAN_OPTIONS=detect_leaks=0 timeout 120 ./pipeline_rate_control_test 16 4 big-jitter
           echo "[pass] pipeline_rate_control_test (64 ms device, ASan)"
           make clean all SANITIZER=thread
           TSAN_OPTIONS=halt_on_error=1 timeout 240 ./pipeline_rate_control_test
