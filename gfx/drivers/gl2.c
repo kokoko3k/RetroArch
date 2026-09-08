@@ -6305,7 +6305,8 @@ static const video_poke_interface_t gl2_poke_interface = {
    NULL, /* set_hdr_subpixel_layout */
    gl2_supports_texture_format,
    gl2_load_texture_compressed,
-   gl2_present_last
+   gl2_present_last,
+   NULL  /* get_last_present_time */
 };
 
 static void gl2_get_poke_interface(void *data,

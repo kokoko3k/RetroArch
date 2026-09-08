@@ -181,12 +181,16 @@ typedef struct thread_video
    retro_time_t last_time;
    /* Presenter state, all owned by the video thread. present_period
     * is one display period in usec, taken from the refresh rate of the
-    * last frame rendered; last_present is when that frame, or the
-    * last repeat of it, went out. present_repeat is set once a frame
+    * last frame rendered; next_present is when a repeat of it falls
+    * due. present_repeat is set once a frame
     * has been rendered with retain_output and the driver can present
     * it again. */
    retro_time_t present_period;
-   retro_time_t last_present;
+   /* When the next repeat is due: one period after the last present,
+    * measured from the display's own timestamp when the driver has one
+    * and from the clock otherwise, and always after that present's
+    * completion so a late display report cannot pile repeats up. */
+   retro_time_t next_present;
    uint64_t frames_repeated;
    /* The wrapped driver's answer to get_refresh_rate, polled on the
     * video thread after each frame and read under 'lock'; 0 when it

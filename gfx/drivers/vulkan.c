@@ -9267,7 +9267,8 @@ static const video_poke_interface_t vulkan_poke_interface = {
 #endif /* VULKAN_HDR_SWAPCHAIN */
    vulkan_supports_texture_format,
    vulkan_load_texture_compressed,
-   vulkan_present_last
+   vulkan_present_last,
+   NULL  /* get_last_present_time */
 };
 
 static void vulkan_get_poke_interface(void *data,

@@ -737,6 +737,13 @@ typedef struct video_poke_interface
     * nothing to present to. Drivers without a cheap way to do this
     * leave it NULL. */
    unsigned (*present_last)(void *data);
+
+   /* When the driver's most recent present reached the display, on the
+    * cpu_features_get_time_usec() clock; 0 when the driver cannot tell.
+    * Never blocks. The presenter phase-locks its repeat deadline to
+    * this, so repeats land on the display's cadence rather than a
+    * timer's. */
+   retro_time_t (*get_last_present_time)(void *data);
 } video_poke_interface_t;
 
 /* msg is for showing a message on the screen

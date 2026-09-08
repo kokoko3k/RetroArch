@@ -453,7 +453,8 @@ static const video_poke_interface_t video_null_poke_interface = {
    NULL, /* set_hdr_subpixel_layout */
    NULL, /* supports_texture_format */
    NULL, /* load_texture_compressed */
-   video_null_present_last
+   video_null_present_last,
+   NULL  /* get_last_present_time */
 };
 static void video_null_get_poke_interface(void *a,
       const video_poke_interface_t **iface) { *iface = &video_null_poke_interface; }

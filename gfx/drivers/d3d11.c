@@ -4219,6 +4219,29 @@ static unsigned d3d11_present_last(void *data)
    return done;
 }
 
+/* The display timestamp of the most recent present, from DXGI's frame
+ * statistics, converted to the QPC-based clock cpu_features_get_time_usec()
+ * keeps on Windows. 0 when the swapchain cannot say (windowed blit
+ * model, or statistics disjoint after a mode change). */
+static retro_time_t d3d11_get_last_present_time(void *data)
+{
+   DXGI_FRAME_STATISTICS stats;
+   static LARGE_INTEGER freq;
+   d3d11_video_t *d3d11 = (d3d11_video_t*)data;
+
+   if (!d3d11 || !d3d11->swapChain)
+      return 0;
+   if (FAILED(d3d11->swapChain->lpVtbl->GetFrameStatistics(
+               d3d11->swapChain, &stats)))
+      return 0;
+   if (!stats.SyncQPCTime.QuadPart)
+      return 0;
+   if (!freq.QuadPart && !QueryPerformanceFrequency(&freq))
+      return 0;
+   return (stats.SyncQPCTime.QuadPart / freq.QuadPart * 1000000)
+        + (stats.SyncQPCTime.QuadPart % freq.QuadPart * 1000000 / freq.QuadPart);
+}
+
 static bool d3d11_gfx_frame(
       void*               data,
       const void*         frame,
@@ -6290,7 +6313,8 @@ static const video_poke_interface_t d3d11_poke_interface = {
 #endif
    d3d11_gfx_supports_texture_format,
    d3d11_gfx_load_texture_compressed,
-   d3d11_present_last
+   d3d11_present_last,
+   d3d11_get_last_present_time
 };
 
 static void d3d11_gfx_get_poke_interface(void* data,

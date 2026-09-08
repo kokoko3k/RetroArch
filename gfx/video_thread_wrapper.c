@@ -582,6 +582,28 @@ static bool video_thread_handle_packet(
    return false;
 }
 
+/* Called on the video thread after a present. Sets when a repeat falls
+ * due: a period after the display's own timestamp for that present when
+ * the driver reports one, else after now; and never at or before now,
+ * so a stale or late report cannot make the next wait fire at once. */
+static void video_thread_schedule_next(thread_video_t *thr)
+{
+   retro_time_t now  = cpu_features_get_time_usec();
+   retro_time_t base = 0;
+   retro_time_t next;
+
+   if (thr->driver_data && thr->poke && thr->poke->get_last_present_time)
+      base = thr->poke->get_last_present_time(thr->driver_data);
+   if (base <= 0 || base > now)
+      base = now;
+
+   next = base + thr->present_period;
+   if (thr->present_period > 0)
+      while (next <= now)
+         next += thr->present_period;
+   thr->next_present = next;
+}
+
 static void video_thread_loop(void *data)
 {
    thread_packet_t pkt;
@@ -604,7 +626,7 @@ static void video_thread_loop(void *data)
          if (thr->present_repeat && thr->present_period > 0)
          {
             retro_time_t now      = cpu_features_get_time_usec();
-            retro_time_t deadline = thr->last_present + thr->present_period;
+            retro_time_t deadline = thr->next_present;
             if (now >= deadline || thr->repeat_request)
             {
                thr->repeat_request = false;
@@ -713,13 +735,13 @@ static void video_thread_loop(void *data)
                   float hz = thr->driver_refresh_rate > 0.0f
                      ? thr->driver_refresh_rate : video_info->refresh_rate;
                   presents = video_driver_presents_per_frame(video_info);
-                  thr->last_present   = cpu_features_get_time_usec();
                   /* A repeat replays the whole group, so it is due a
                    * group's worth of display periods later. */
                   thr->present_period = hz > 0.0f
                      ? (retro_time_t)(1000000.0f * (float)presents / hz) : 0;
                   thr->present_repeat = video_info->retain_output;
                   thr->present_group  = (unsigned)presents;
+                  video_thread_schedule_next(thr);
                }
                else
                   thr->present_repeat = false;
@@ -786,7 +808,7 @@ static void video_thread_loop(void *data)
          {
             video_state_get_ptr()->swap_count += swaps;
             thr->frames_repeated++;
-            thr->last_present   = cpu_features_get_time_usec();
+            video_thread_schedule_next(thr);
          }
          else
             thr->present_repeat = false;
@@ -1781,7 +1803,8 @@ static const video_poke_interface_t thread_poke = {
    thread_set_hdr_subpixel_layout,
    thread_supports_texture_format,
    thread_load_texture_compressed,
-   thread_present_last
+   thread_present_last,
+   NULL  /* get_last_present_time: consumed on the video thread */
 };
 
 static void video_thread_get_poke_interface(void *data,

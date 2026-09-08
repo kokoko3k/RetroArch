@@ -42,6 +42,7 @@
 
 #include <time/rtime.h>
 #include <retro_timers.h>
+#include <features/features_cpu.h>
 #include <rthreads/rthreads.h>
 #include <file/config_file.h>
 
@@ -643,6 +644,81 @@ static void lane_reentrant_from_frame(void)
 }
 
 /* ------------------------------------------------------------------ */
+/* Lane: display-phase scheduling with a stale report                  */
+/*   The presenter schedules the next repeat from the driver's display */
+/*   timestamp. A driver whose report lags well behind the clock must  */
+/*   not make repeats fire back-to-back: the deadline is advanced past */
+/*   now in whole periods, so the cadence holds.                       */
+/* ------------------------------------------------------------------ */
+
+static video_driver_t phase_driver;
+static const video_driver_t *phase_inner;
+static video_poke_interface_t phase_poke;
+static const video_poke_interface_t *phase_inner_poke;
+
+static retro_time_t phase_stale_present_time(void *data)
+{
+   (void)data;
+   return cpu_features_get_time_usec() - 50000; /* three periods late */
+}
+
+static void phase_get_poke(void *data, const video_poke_interface_t **iface)
+{
+   phase_inner->poke_interface(data, &phase_inner_poke);
+   phase_poke = *phase_inner_poke;
+   phase_poke.get_last_present_time = phase_stale_present_time;
+   *iface = &phase_poke;
+}
+
+static void lane_display_phase(void)
+{
+   unsigned had = failures;
+   video_driver_state_t *video_st = video_state_get_ptr();
+   settings_t *settings           = config_get_ptr();
+   thread_video_t *thr;
+   uint64_t rep0, rep1;
+
+   settings->bools.video_threaded_present_repeat = true;
+   set_threaded_via_setting(true);
+   run_frames(3);
+   expect_wrapper(true, "phase lane");
+   thr = (thread_video_t*)video_st->data;
+
+   video_thread_wait_idle();
+   phase_inner  = thr->driver;
+   phase_driver = *thr->driver;
+   phase_driver.poke_interface = phase_get_poke;
+   thr->driver  = &phase_driver;
+   /* The wrapper caches its poke at init; refresh it through the
+    * swapped driver so the stale report is what the worker reads. */
+   phase_driver.poke_interface(thr->driver_data, &thr->poke);
+
+   run_frames(10);
+   video_thread_wait_idle();
+   slock_lock(thr->lock);
+   rep0 = thr->frames_repeated;
+   slock_unlock(thr->lock);
+   retro_sleep(70);
+   video_thread_wait_idle();
+   slock_lock(thr->lock);
+   rep1 = thr->frames_repeated;
+   slock_unlock(thr->lock);
+   CHECK(rep1 > rep0, "no repeats with a stale display report");
+   CHECK(rep1 - rep0 <= 8,
+         "%llu repeats over 70 ms: a stale display report piled them up",
+         (unsigned long long)(rep1 - rep0));
+
+   thr->driver = phase_inner;
+   thr->poke   = phase_inner_poke;
+   settings->bools.video_threaded_present_repeat = false;
+   set_threaded_via_setting(false);
+
+   if (failures == had)
+      fprintf(stderr, "[pass] display-phase lane (%llu repeats)\n",
+            (unsigned long long)(rep1 - rep0));
+}
+
+/* ------------------------------------------------------------------ */
 
 int main(int argc, char *argv[])
 {
@@ -728,6 +804,7 @@ int main(int argc, char *argv[])
    lane_every_command_replies();
    lane_second_ring_waiter();
    lane_reentrant_from_frame();
+   lane_display_phase();
 
    /* Orderly shutdown: the teardown barriers are part of what is
     * under test. */
