@@ -3934,6 +3934,91 @@ static void gl2_encode_pq_to_sdr(gl2_t *gl)
    glViewport(gl->vp.x, gl->vp.y, gl->vp.width, gl->vp.height);
 }
 
+/* Copies the backbuffer into the retained texture, sizing that texture
+ * to the window when it does not match. */
+static void gl2_retain_backbuffer(gl2_t *gl)
+{
+   unsigned width  = gl->video_width;
+   unsigned height = gl->video_height;
+
+   if (!width || !height)
+      return;
+
+   gl2_renderchain_bind_backbuffer();
+   if (!gl->retained_texture)
+      glGenTextures(1, &gl->retained_texture);
+   glBindTexture(GL_TEXTURE_2D, gl->retained_texture);
+   if (gl->retained_width != width || gl->retained_height != height)
+   {
+      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0,
+            GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+      gl->retained_width  = width;
+      gl->retained_height = height;
+   }
+   glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, width, height);
+   glBindTexture(GL_TEXTURE_2D, gl->texture[gl->tex_index]);
+}
+
+/* Replays the group the retaining frame made: the retained texture
+ * drawn over the whole window with the stock shader for each light
+ * present, a clear for each dark one, a swap after each. The copy was
+ * taken from the backbuffer, so it is already the right way up and is
+ * drawn with the unflipped vertices. Returns swaps made. */
+static unsigned gl2_present_last(void *data)
+{
+   unsigned i;
+   unsigned done = 0;
+   gl2_t *gl     = (gl2_t*)data;
+
+   if (     !gl || !gl->retained_texture
+         || gl->retained_width  != gl->video_width
+         || gl->retained_height != gl->video_height)
+      return 0;
+
+   for (i = 0; i < gl->retained_light; i++)
+   {
+      gl2_renderchain_bind_backbuffer();
+      glViewport(0, 0, gl->video_width, gl->video_height);
+      glBindTexture(GL_TEXTURE_2D, gl->retained_texture);
+
+      gl->coords.vertex    = vertexes;
+      gl->coords.tex_coord = tex_coords;
+      gl->coords.color     = gl->white_color_ptr;
+      gl->coords.vertices  = 4;
+
+      gl->shader->use(gl, gl->shader_data, VIDEO_SHADER_STOCK_BLEND, true);
+      gl->shader->set_coords(gl->shader_data, &gl->coords);
+      gl->shader->set_mvp(gl->shader_data, &gl->mvp_no_rot);
+
+      glDisable(GL_BLEND);
+      glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+      gl->coords.vertex    = gl->vertex_ptr;
+      gl->coords.tex_coord = gl->tex_info.coord;
+      glViewport(gl->vp.x, gl->vp.y, gl->vp.width, gl->vp.height);
+      glBindTexture(GL_TEXTURE_2D, gl->texture[gl->tex_index]);
+
+      if (gl->ctx_driver->swap_buffers)
+         gl->ctx_driver->swap_buffers(gl->ctx_data);
+      done++;
+   }
+
+   for (i = 0; i < gl->retained_dark; i++)
+   {
+      gl2_renderchain_bind_backbuffer();
+      glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+      glClear(GL_COLOR_BUFFER_BIT);
+      if (gl->ctx_driver->swap_buffers)
+         gl->ctx_driver->swap_buffers(gl->ctx_data);
+      done++;
+   }
+   return done;
+}
+
 static bool gl2_frame(void *data, const void *frame,
       unsigned frame_width, unsigned frame_height,
       uint64_t frame_count,
@@ -4380,6 +4465,17 @@ static bool gl2_frame(void *data, const void *frame,
       }
    }
 
+   /* The backbuffer is what it is until the swap, so the copy is
+    * taken now. Not from the BFI light dupes, which recurse in here
+    * with the dupe lock held and would only copy the same image. */
+   if (     video_info->retain_output
+         && !(gl->flags & GL2_FLAG_FRAME_DUPE_LOCK))
+   {
+      gl2_retain_backbuffer(gl);
+      gl->retained_light = 1;
+      gl->retained_dark  = 0;
+   }
+
     if (gl->ctx_driver->swap_buffers)
         gl->ctx_driver->swap_buffers(gl->ctx_data);
 
@@ -4431,6 +4527,15 @@ static bool gl2_frame(void *data, const void *frame,
             if (gl->ctx_driver->swap_buffers)
                gl->ctx_driver->swap_buffers(gl->ctx_data);
          }
+      }
+
+      /* The group this frame made, for present_last() to replay. */
+      if (     video_info->retain_output
+            && !(gl->flags & GL2_FLAG_FRAME_DUPE_LOCK))
+      {
+         gl->retained_light = 1 + (video_info->black_frame_insertion
+               - video_info->bfi_dark_frames);
+         gl->retained_dark  = video_info->bfi_dark_frames;
       }
    }
 #endif
@@ -4536,6 +4641,8 @@ static void gl2_free(void *data)
    if (gl->menu_texture)
       glDeleteTextures(1, &gl->menu_texture);
 #endif
+   if (gl->retained_texture)
+      glDeleteTextures(1, &gl->retained_texture);
 
 #ifdef HAVE_OVERLAY
    gl2_free_overlay(gl);
@@ -6197,7 +6304,8 @@ static const video_poke_interface_t gl2_poke_interface = {
    NULL, /* set_hdr_scanlines */
    NULL, /* set_hdr_subpixel_layout */
    gl2_supports_texture_format,
-   gl2_load_texture_compressed
+   gl2_load_texture_compressed,
+   gl2_present_last
 };
 
 static void gl2_get_poke_interface(void *data,

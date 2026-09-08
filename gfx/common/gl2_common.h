@@ -90,6 +90,15 @@ struct gl2
    GLuint pbo;
    GLuint *overlay_tex;
    GLuint menu_texture;
+   /* Copy of the last presented backbuffer, taken with
+    * glCopyTexSubImage2D before the swap of a frame() that asked for it
+    * (retain_output), plus the group that frame put on screen for
+    * present_last() to replay. GL 1.1 / GLES2, so every context. */
+   GLuint retained_texture;
+   unsigned retained_width;
+   unsigned retained_height;
+   unsigned retained_light;
+   unsigned retained_dark;
    GLuint pbo_readback[4];
    GLuint texture[GFX_MAX_TEXTURES];
    GLuint hw_render_fbo[GFX_MAX_TEXTURES];
