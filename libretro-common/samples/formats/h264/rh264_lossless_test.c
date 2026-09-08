@@ -1,5 +1,5 @@
-/* rh264: High 4:4:4 Predictive transform bypass (lossless), against
- * ffmpeg as the oracle, byte-exact.
+/* rh264: High 4:4:4 Predictive - the transform bypass (lossless) and
+ * 4:4:4 chroma - against ffmpeg as the oracle, byte-exact.
  *
  * x264's lossless mode (-qp 0) sets qpprime_y_zero_transform_bypass_flag
  * and codes every macroblock at QP'Y 0: the residual is the sample
@@ -198,8 +198,11 @@ done:
    return bad;
 }
 
-static void lossless_case(const char *name, const char *src,
-      int frames, const char *x264)
+/* Encode 'src' with x264 ('rate' is -qp 0 / -crf N, 'pix' the chroma
+ * format), decode it through rmp4 + rh264 and compare every sample
+ * with ffmpeg's decode. */
+static void oracle_case(const char *name, const char *src, int frames,
+      const char *pix, const char *rate, const char *x264)
 {
    char mp4[512], yuv[512], label[160];
    uint8_t *ref;
@@ -208,11 +211,12 @@ static void lossless_case(const char *name, const char *src,
    long bad;
    snprintf(mp4, sizeof(mp4), "%s/%s.mp4", dir, name);
    snprintf(yuv, sizeof(yuv), "%s/%s.yuv", dir, name);
-   snprintf(label, sizeof(label), "%s (%s) byte-exact vs ffmpeg", name, x264);
+   snprintf(label, sizeof(label), "%s (%s %s) byte-exact vs ffmpeg",
+         name, pix, x264);
    if (run("ffmpeg -v error -y -f lavfi -i \"%s\" -frames:v %d -c:v libx264 "
-           "-qp 0 -pix_fmt yuv420p %s '%s' && "
-           "ffmpeg -v error -y -i '%s' -f rawvideo -pix_fmt yuv420p '%s'",
-           src, frames, x264, mp4, mp4, yuv) != 0
+           "%s -pix_fmt %s %s '%s' && "
+           "ffmpeg -v error -y -i '%s' -f rawvideo -pix_fmt %s '%s'",
+           src, frames, rate, pix, x264, mp4, mp4, pix, yuv) != 0
        || !(ref = slurp(yuv, &rlen)))
    {
       check(label, 0);
@@ -223,6 +227,12 @@ static void lossless_case(const char *name, const char *src,
          bad < 0 ? " (decode refused or failed)" : "");
    check(label, bad == 0 && nf == frames);
    free(ref);
+}
+
+static void lossless_case(const char *name, const char *src,
+      int frames, const char *x264)
+{
+   oracle_case(name, src, frames, "yuv420p", "-qp 0", x264);
 }
 
 /* ---- the mixed stream: Annex-B surgery ---------------------------- */
@@ -509,6 +519,25 @@ int main(void)
          2, "-preset medium -g 1");
    printf("deblocking across a bypass / lossy slice boundary (8.7.2.1):\n");
    mixed_case();
+   /* 4:4:4 (ChromaArrayType 3): Cb and Cr decoded as luma.  Intra and
+    * inter, CAVLC and CABAC, 4x4 and 8x8 transforms, weighted
+    * bi-prediction with a B-pyramid, I_PCM, the deblocking filter on
+    * (luma-style on the chroma planes), lossy and lossless. */
+   printf("High 4:4:4 Predictive, 4:4:4 chroma, byte-exact vs ffmpeg:\n");
+   oracle_case("c444_i_cavlc",   "testsrc2=s=96x80:r=10",    4, "yuv444p", "-crf 16",
+         "-preset medium -g 1 -x264-params cabac=0:deblock=2,2");
+   oracle_case("c444_i_cabac8",  "mandelbrot=s=112x96:r=10", 3, "yuv444p", "-crf 16",
+         "-preset medium -g 1");
+   oracle_case("c444_ipb_cavlc", "testsrc2=s=96x80:r=10",    6, "yuv444p", "-crf 22",
+         "-preset medium -x264-params cabac=0:no-8x8dct=1");
+   oracle_case("c444_ipb_cabac", "mandelbrot=s=112x96:r=10", 6, "yuv444p", "-crf 22",
+         "-preset medium -x264-params deblock=1,1");
+   oracle_case("c444_wp_bpyr",   "testsrc2=s=96x80:r=10,fade=in:0:6", 8, "yuv444p", "-crf 20",
+         "-preset slow -x264-params weightp=2:bframes=3:b-pyramid=normal:deblock=3,3");
+   oracle_case("c444_lossless",  "mandelbrot=s=112x96:r=10", 6, "yuv444p", "-qp 0",
+         "-preset medium");
+   oracle_case("c444_ll_cavlc",  "mandelbrot=s=112x96:r=10", 3, "yuv444p", "-qp 0",
+         "-preset medium -g 1 -x264-params cabac=0");
 
    run("rm -rf '%s'", dir);
    printf("rh264_lossless_test: %s (%d failure%s)\n", fails ? "FAIL" : "PASS",

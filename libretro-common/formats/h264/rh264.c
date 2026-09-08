@@ -4,8 +4,9 @@
  * lookup tables at open.
  *
  * What it implements: I, P and B slices with both CAVLC and CABAC
- * entropy coding; 8-bit 4:2:0 and 4:2:2 reconstruction; the full
- * integer transforms (4x4 and 8x8, with scaling matrices) and the
+ * entropy coding; 8-bit 4:2:0, 4:2:2 and 4:4:4 reconstruction (the
+ * chroma planes of 4:4:4 decoded as luma, ChromaArrayType 3); the
+ * full integer transforms (4x4 and 8x8, with scaling matrices) and the
  * lossless transform bypass of High 4:4:4 Predictive (qpprime_y_zero_
  * transform_bypass_flag, 8.5.15); intra and
  * inter prediction with quarter-pel motion compensation, multiple
@@ -15,8 +16,8 @@
  * with display-order output; Annex-B and length-prefixed AVCC input.
  * Frame-coded MBAFF pairs decode, as do CAVLC I/P field pictures.
  *
- * What it does not implement: monochrome, 4:4:4 chroma and
- * high-bit-depth streams; SP/SI switching slices; FMO/ASO
+ * What it does not implement: monochrome, separate-colour-plane
+ * 4:4:4 and high-bit-depth streams; SP/SI switching slices; FMO/ASO
  * and redundant pictures; field-coded B and CABAC pictures and
  * field-coded macroblock pairs; encoding.  Out-of-scope streams are
  * refused at the parameter-set or slice level rather than decoded
@@ -155,17 +156,18 @@ typedef struct { int valid,profile_idc,level_idc,log2_max_frame_num,pic_order_cn
    vui_num_reorder; /* VUI max_num_reorder_frames, -1 when not signalled */
    int32_t poc1_offset_ref[256]; /* offset_for_ref_frame (POC type 1)  */
    int scaling_present;         /* seq_scaling_matrix_present_flag */
-   uint8_t sl_present[8];       /* seq_scaling_list_present_flag   */
-   uint8_t sl_usedef[8];        /* first delta selected the default */
+   uint8_t sl_present[12];      /* seq_scaling_list_present_flag   */
+   uint8_t sl_usedef[12];       /* first delta selected the default */
    uint8_t sl4[6][16];          /* parsed 4x4 lists (raster)        */
-   uint8_t sl8[2][64];          /* parsed 8x8 lists (raster)        */
+   uint8_t sl8[6][64];          /* parsed 8x8 lists (raster); 4:4:4
+                                 * carries six (Y/Cb/Cr x intra/inter) */
    } rh264_sps;
 typedef struct { int valid,entropy_coding_mode_flag,pic_order_present_flag,pic_init_qp,
    num_ref_idx_l0_default,num_ref_idx_l1_default,weighted_pred_flag,weighted_bipred_idc,
    deblocking_filter_control_present,constrained_intra_pred_flag,chroma_qp_index_offset,
    transform_8x8_mode,chroma_qp_index_offset2,
-   scaling_present; uint8_t sl_present[8],sl_usedef[8],
-   sl4[6][16],sl8[2][64]; } rh264_pps;
+   scaling_present; uint8_t sl_present[12],sl_usedef[12],
+   sl4[6][16],sl8[6][64]; } rh264_pps;
 static const uint8_t rh264_zigzag4[16]={0,1,4,8,5,2,3,6,9,12,13,10,7,11,14,15};
 /* Field-coded macroblocks scan their coefficients in a different order
  * (Tables 8-12 and 8-13): a line's vertical neighbour within a field is
@@ -231,21 +233,23 @@ static int rh264_parse_sps(const uint8_t *rbsp,size_t size,rh264_sps *s){
    if(s->profile_idc==100||s->profile_idc==110||s->profile_idc==122||s->profile_idc==244||
       s->profile_idc==44||s->profile_idc==83||s->profile_idc==86||s->profile_idc==118||
       s->profile_idc==128||s->profile_idc==138||s->profile_idc==139||s->profile_idc==134){
-      s->chroma_format_idc=rh264_ue(&b); if(s->chroma_format_idc==3) rh264_u1(&b);
-      /* the reconstruction pipeline is 8-bit; refusing here keeps a
-       * monochrome, 4:4:4 or high-bit-depth stream from silently
-       * decoding as if it were plain 4:2:0. */
-      /* 4:2:0 and 4:2:2; 4:4:4 additionally needs the separate colour
-       * plane handling and is not decoded. */
-      if(s->chroma_format_idc!=1&&s->chroma_format_idc!=2) return 0;
+      s->chroma_format_idc=rh264_ue(&b);
+      /* 4:4:4 with the three colour planes coded together (Cb and Cr
+       * as luma-like planes, 7.4.2.1.1 ChromaArrayType 3); the
+       * separate-plane form decodes three monochrome pictures and is
+       * not carried.  Monochrome and high bit depth are refused: the
+       * reconstruction pipeline is 8-bit and always has chroma. */
+      if(s->chroma_format_idc==3){ if(rh264_u1(&b)) return 0; }
+      if(s->chroma_format_idc<1||s->chroma_format_idc>3) return 0;
       if(rh264_ue(&b)!=0) return 0;      /* bit_depth_luma_minus8   */
       if(rh264_ue(&b)!=0) return 0;      /* bit_depth_chroma_minus8 */
       /* lossless: a macroblock at QP'Y == 0 carries its residual as
        * samples, no transform (8.5.15) */
       s->tb=rh264_u1(&b);
       if(rh264_u1(&b)){
+         int nl=(s->chroma_format_idc==3)?12:8;
          s->scaling_present=1;
-         for(i=0;i<8;i++){
+         for(i=0;i<nl;i++){
             s->sl_present[i]=(uint8_t)rh264_u1(&b);
             if(s->sl_present[i]){
                if(i<6)
@@ -355,7 +359,8 @@ static int rh264_parse_sps(const uint8_t *rbsp,size_t size,rh264_sps *s){
    }
    s->valid=1; return 1;
 }
-static int rh264_parse_pps(const uint8_t *rbsp,size_t size,rh264_pps *p){
+static int rh264_parse_pps(const uint8_t *rbsp,size_t size,rh264_pps *p,
+      int chroma444){
    rh264_bits b; memset(p,0,sizeof(*p)); rh264_bits_init(&b,rbsp,size);
    rh264_ue(&b); rh264_ue(&b); p->entropy_coding_mode_flag=rh264_u1(&b);
    p->pic_order_present_flag=rh264_u1(&b);
@@ -379,7 +384,7 @@ static int rh264_parse_pps(const uint8_t *rbsp,size_t size,rh264_pps *p){
    if(rh264_more_rbsp(&b)){
       p->transform_8x8_mode=rh264_u1(&b);
       if(rh264_u1(&b)){
-         int i,n=6+2*p->transform_8x8_mode;
+         int i,n=6+(chroma444?6:2)*p->transform_8x8_mode;
          p->scaling_present=1;
          for(i=0;i<n;i++){
             p->sl_present[i]=(uint8_t)rh264_u1(&b);
@@ -401,18 +406,22 @@ static int rh264_parse_pps(const uint8_t *rbsp,size_t size,rh264_pps *p){
  * lists 0..5 are the 4x4 Intra/Inter Y,Cb,Cr weights, then the 8x8 Intra and
  * Inter luma weights. Flat 16 when neither parameter set carries matrices. */
 static void rh264_resolve_scaling(const rh264_sps *s, const rh264_pps *p,
-      uint8_t w4[6][16], uint8_t w8[2][64])
+      uint8_t w4[6][16], uint8_t w8[6][64])
 {
-   int i, k;
+   /* 8x8 lists: 0 Intra Y, 1 Inter Y, and for 4:4:4 also 2 Intra Cb,
+    * 3 Inter Cb, 4 Intra Cr, 5 Inter Cr; the chroma ones fall back to
+    * the previous list of the same kind (rule A / B). */
+   int i, k, n8 = (s->chroma_format_idc == 3) ? 6 : 2;
    if (!s->scaling_present && !p->scaling_present)
    {
       for (i = 0; i < 6; i++) for (k = 0; k < 16; k++) w4[i][k] = 16;
-      for (i = 0; i < 2; i++) for (k = 0; k < 64; k++) w8[i][k] = 16;
+      for (i = 0; i < 6; i++) for (k = 0; k < 64; k++) w8[i][k] = 16;
       return;
    }
+   for (i = 0; i < 6; i++) for (k = 0; k < 64; k++) w8[i][k] = 16;
    if (s->scaling_present)
    {
-      for (i = 0; i < 8; i++)
+      for (i = 0; i < 6 + n8; i++)
       {
          if (i < 6)
          {
@@ -429,17 +438,20 @@ static void rh264_resolve_scaling(const rh264_sps *s, const rh264_pps *p,
          else
          {
             const uint8_t *m;
-            if (!s->sl_present[i] || s->sl_usedef[i])
-               m = (i == 6) ? rh264_def8_intra : rh264_def8_inter;
+            if (!s->sl_present[i])   /* fall-back rule A */
+               m = (i == 6) ? rh264_def8_intra : (i == 7) ? rh264_def8_inter
+                 : w8[i-8];
+            else if (s->sl_usedef[i])
+               m = (i & 1) ? rh264_def8_inter : rh264_def8_intra;
             else
                m = s->sl8[i-6];
-            memcpy(w8[i-6], m, 64);
+            if (m != w8[i-6]) memcpy(w8[i-6], m, 64);
          }
       }
    }
    if (p->scaling_present)
    {
-      for (i = 0; i < 8; i++)
+      for (i = 0; i < 6 + n8; i++)
       {
          if (i < 6)
          {
@@ -461,11 +473,16 @@ static void rh264_resolve_scaling(const rh264_sps *s, const rh264_pps *p,
          else if (p->transform_8x8_mode)
          {
             const uint8_t *m;
-            if (!p->sl_present[i])
-               m = s->scaling_present ? w8[i-6]
-                 : (i == 6) ? rh264_def8_intra : rh264_def8_inter;
+            if (!p->sl_present[i])   /* fall-back rule B */
+            {
+               if (i == 6 || i == 7)
+                  m = s->scaling_present ? w8[i-6]
+                    : (i == 6) ? rh264_def8_intra : rh264_def8_inter;
+               else
+                  m = w8[i-8];
+            }
             else if (p->sl_usedef[i])
-               m = (i == 6) ? rh264_def8_intra : rh264_def8_inter;
+               m = (i & 1) ? rh264_def8_inter : rh264_def8_intra;
             else
                m = p->sl8[i-6];
             if (m != w8[i-6]) memcpy(w8[i-6], m, 64);
@@ -1582,6 +1599,12 @@ typedef struct rh264_cbf_s {
    int cDC[2];     /* chroma DC cbf [cb,cr]                       */
    int cAC[2][8];  /* chroma AC cbf [cb,cr][blk]; 8 for 4:2:2     */
    int t8;         /* luma_transform_size_8x8_flag                */
+   int pcm;        /* I_PCM: every coded_block_flag reads as 1    */
+   /* 4:4:4: Cb and Cr carry luma-shaped coded_block_flags of their
+    * own (ctxBlockCat 6..13); an 8x8 block's flag is replicated into
+    * its four 4x4 entries, as luma[] does. */
+   int cbDC, crDC;
+   int cb[16], cr[16];
 } rh264_cbf;
 
 typedef struct {
@@ -1603,9 +1626,17 @@ typedef struct {
    uint8_t *Yb,*Ub,*Vb;
    int ysb,csb,mbh_frame,field;
    int mbaff;             /* macroblock pairs, scanned two rows at a time */
-   /* chroma rows per macroblock: 8 for 4:2:0, 16 for 4:2:2, where
-    * chroma keeps the luma height */
+   /* chroma rows per macroblock: 8 for 4:2:0, 16 for 4:2:2 and 4:4:4,
+    * where chroma keeps the luma height */
    int cmbh;
+   /* 4:4:4 (ChromaArrayType 3): the chroma planes are luma-sized and
+    * Cb / Cr are decoded exactly as luma is - luma intra modes, luma
+    * residual syntax (their own coefficient-count grids nzC, luma
+    * shaped), luma transforms with the chroma QP and scaling lists,
+    * luma motion compensation, luma-style deblocking.  Nothing
+    * chroma-specific (chroma DC, intra_chroma_pred_mode, the 4:2:x
+    * chroma blocks) exists in such a stream. */
+   int c444;
    int qp;
    /* qpprime_y_zero_transform_bypass_flag: with it, a macroblock at
     * QP'Y == 0 is in transform-bypass mode (7.4.5, 8.5.15) - its
@@ -1626,7 +1657,8 @@ typedef struct {
    uint8_t *mbt8;     /* per-MB 8x8-transform flag (mbw x mbh)          */
    uint8_t *mbslice;  /* per-MB slice index (mbw x mbh), for deblocking */
    uint8_t w4[6][16]; /* effective 4x4 weight matrices (raster)         */
-   uint8_t w8[2][64]; /* effective 8x8 weight matrices (raster)         */
+   uint8_t w8[6][64]; /* effective 8x8 weight matrices (raster): Y intra/
+                       * inter, then Cb and Cr pairs (4:4:4)          */
    struct rh264_mv_s *mvg; /* per-4x4 motion of this picture, reference pictures only */
    /* A stored field pair keeps a grid per parity: mvg holds the top
     * field's motion (or a frame picture's), mvg2 the bottom field's.
@@ -1696,6 +1728,12 @@ static const uint8_t rh264_blk_y[16]={0,0,1,1, 0,0,1,1, 2,2,3,3, 2,2,3,3};
 static const uint8_t rh264_cbp_intra[48]={
    47,31,15,0,23,27,29,30,7,11,13,14,39,43,45,46,16,3,5,10,12,19,21,26,28,35,
    37,42,44,1,2,4,8,17,18,20,24,6,9,22,25,32,33,34,36,40,38,41};
+/* The same for ChromaArrayType 0 or 3 (Table 9-4, right-hand columns):
+ * sixteen code numbers, luma bits only. */
+static const uint8_t rh264_cbp_intra_noc[16]={
+   15,0,7,11,13,14,3,5,10,12,1,2,4,8,6,9};
+static const uint8_t rh264_cbp_inter_noc[16]={
+   0,1,2,4,8,3,5,10,12,15,7,11,13,14,6,9};
 
 /* nC from left & top 4x4 neighbour nonzero counts (9.2.1). gx,gy are the
  * 4x4-block grid coords. */
@@ -1937,24 +1975,28 @@ static void rh264_intra8x8(uint8_t *dst, int stride, int mode,
  * sub-block keeps its own total_coeff for later nC derivations. Applies
  * dequantisation, the 8x8 inverse transform, and adds onto the prediction
  * already in the frame. */
-static int rh264_cavlc_luma8x8(rh264_bits *b, rh264_frame *f,
-      int mbx, int mby, int b8, int slice_first, int intra, int dpcm)
+/* One 8x8 block of a luma-coded plane: the plane's sample pointer for
+ * the block, stride, coefficient-count grid (luma shaped), qP and 8x8
+ * weight matrix.  Luma passes its own; in 4:4:4 Cb and Cr pass theirs
+ * (8.5.1: the chroma planes decode as luma there). */
+static int rh264_cavlc_plane8x8(rh264_bits *b, rh264_frame *f,
+      uint8_t *d, int stride, uint8_t *nz, const uint8_t *w8,
+      int qp, int mbx, int mby, int b8, int slice_first, int dpcm)
 {
    int gw = f->mbw * 4;
    int bx8 = (b8 & 1), by8 = (b8 >> 1);
-   uint8_t *d = f->Y + (mby*16 + by8*8) * f->ystride + mbx*16 + bx8*8;
    int32_t scan[64], coef[64], r[64];
    int i, k;
    for (k = 0; k < 64; k++) scan[k] = 0;
    for (i = 0; i < 4; i++)
    {
       int gx = mbx*4 + bx8*2 + (i & 1), gy = mby*4 + by8*2 + (i >> 1);
-      int nC = rh264_nC(f->nzL, gw, f->mbh*4, gx, gy, slice_first);
+      int nC = rh264_nC(nz, gw, f->mbh*4, gx, gy, slice_first);
       int32_t sub[16];
       int tc = rh264_residual_block(b, nC, 16, sub);
       if (tc < 0) return -1;
       for (k = 0; k < 16; k++) scan[4*k + i] = sub[k];
-      f->nzL[gy*gw + gx] = (uint8_t)tc;
+      nz[gy*gw + gx] = (uint8_t)tc;
    }
    for (k = 0; k < 64; k++) coef[k] = 0;
    { const uint8_t *sc = RH264_SCAN8(f);
@@ -1962,12 +2004,185 @@ static int rh264_cavlc_luma8x8(rh264_bits *b, rh264_frame *f,
    if (RH264_TB(f))
    {
       rh264_tb_dpcm(coef, 8, 8, dpcm);
-      rh264_add_bypass(d, f->ystride, coef, 8, 8, 8);
+      rh264_add_bypass(d, stride, coef, 8, 8, 8);
       return 0;
    }
-   rh264_dequant8x8(coef, f->qp, f->w8[intra ? 0 : 1]);
+   rh264_dequant8x8(coef, qp, w8);
    rh264_itransform8x8(coef, r);
-   rh264_add_residual(d, f->ystride, r, 8);
+   rh264_add_residual(d, stride, r, 8);
+   return 0;
+}
+
+static int rh264_cavlc_luma8x8(rh264_bits *b, rh264_frame *f,
+      int mbx, int mby, int b8, int slice_first, int intra, int dpcm)
+{
+   int bx8 = (b8 & 1), by8 = (b8 >> 1);
+   uint8_t *d = f->Y + (mby*16 + by8*8) * f->ystride + mbx*16 + bx8*8;
+   return rh264_cavlc_plane8x8(b, f, d, f->ystride, f->nzL,
+         f->w8[intra ? 0 : 1], f->qp, mbx, mby, b8, slice_first, dpcm);
+}
+
+static int rh264_chroma_qp(int qpy, int offset);
+
+/* 4:4:4: one chroma plane of an intra macroblock, decoded as luma
+ * (8.3.4.5, 7.3.5.3 residual_luma for Cb / Cr): the luma prediction
+ * modes, the luma residual syntax against the plane's own coefficient
+ * counts, the luma transforms at the chroma qP with the chroma weight
+ * matrices.  Follows the luma part of the macroblock in the bitstream
+ * - Cb then Cr - so the luma modes are known.  kind: 0 I_4x4 (modes[16]
+ * in coding order), 1 I_8x8 (modes[4]), 2 I_16x16 (pred16). */
+static int rh264_cavlc_intra_plane444(rh264_bits *b, rh264_frame *f,
+      int comp, int mbx, int mby, int kind, const int *modes, int pred16,
+      int cbp_luma, int have_up, int have_left, int have_ur, int have_ul,
+      int slice_first)
+{
+   int gw = f->mbw * 4, gx0 = mbx*4, gy0 = mby*4;
+   int stride = f->cstride;
+   uint8_t *P  = (comp ? f->V : f->U) + (size_t)mby*16*stride + mbx*16;
+   uint8_t *nz = f->nzC[comp];
+   int qpc = rh264_chroma_qp(f->qp,
+         comp ? f->chroma_qp_offset2 : f->chroma_qp_offset);
+   const uint8_t *w4 = f->w4[1 + comp];
+   const uint8_t *w8 = f->w8[2 + 2*comp];
+   int tb = RH264_TB(f);
+   int i, k;
+
+   if (kind == 1)
+   {
+      int b8;
+      for (b8 = 0; b8 < 4; b8++)
+      {
+         int bx8 = (b8 & 1), by8 = (b8 >> 1);
+         uint8_t *d = P + by8*8*stride + bx8*8;
+         int hu = by8 || have_up, hl = bx8 || have_left;
+         int hul = (bx8 && by8) ? 1 : (bx8 ? have_up : (by8 ? have_left : have_ul));
+         int hur = (b8 == 0) ? have_up : (b8 == 1) ? have_ur : (b8 == 2) ? 1 : 0;
+         rh264_intra8x8(d, stride, modes[b8], hu, hl, hul, hur);
+         if (cbp_luma & (1 << b8))
+         {
+            if (rh264_cavlc_plane8x8(b, f, d, stride, nz, w8, qpc,
+                     mbx, mby, b8, slice_first,
+                     rh264_tb_luma_dpcm(modes[b8])) < 0)
+               return -1;
+         }
+         else
+         {
+            int cy, cx;
+            for (cy = 0; cy < 2; cy++) for (cx = 0; cx < 2; cx++)
+               nz[(gy0 + by8*2 + cy)*gw + gx0 + bx8*2 + cx] = 0;
+         }
+      }
+      return 0;
+   }
+   if (kind == 0)
+   {
+      for (i = 0; i < 16; i++)
+      {
+         int bx = rh264_blk_x[i], by = rh264_blk_y[i];
+         int gx = gx0 + bx, gy = gy0 + by;
+         uint8_t *d = P + by*4*stride + bx*4;
+         int hu = (by > 0) || have_up, hl = (bx > 0) || have_left;
+         int hur, hulb, nzc = 0;
+         switch (i)
+         {
+            case 2: case 6: case 8: case 9: case 10: case 12: case 14:
+               hur = 1; break;
+            case 3: case 11: case 13: case 15:
+               hur = 0; break;
+            case 0: case 1: case 4:
+               hur = have_up; break;
+            case 5:
+               hur = have_ur; break;
+            default:
+               hur = 0; break;
+         }
+         hulb = (bx && by) ? 1 : (bx ? hu : (by ? hl : have_ul));
+         rh264_intra4x4(d, stride, modes[i], hu, hl, hur, hulb);
+         if (cbp_luma & (1 << (i >> 2)))
+         {
+            int nC = rh264_nC(nz, gw, f->mbh*4, gx, gy, slice_first);
+            int32_t scan[16], coef[16], r[16];
+            int tc = rh264_residual_block(b, nC, 16, scan);
+            if (tc < 0) return -1;
+            nzc = tc;
+            for (k = 0; k < 16; k++) coef[k] = 0;
+            { const uint8_t *sc = RH264_SCAN4(f);
+              for (k = 0; k < 16; k++) coef[sc[k]] = scan[k]; }
+            if (tb)
+            {
+               rh264_tb_dpcm(coef, 4, 4, rh264_tb_luma_dpcm(modes[i]));
+               rh264_add_bypass(d, stride, coef, 4, 4, 4);
+            }
+            else
+            {
+               rh264_dequant4x4(coef, qpc, 0, w4);
+               rh264_itransform4x4(coef, r);
+               rh264_add_residual(d, stride, r, 4);
+            }
+         }
+         nz[gy*gw + gx] = (uint8_t)nzc;
+      }
+      return 0;
+   }
+   /* I_16x16 */
+   {
+      int32_t dc[16], tmp[16], tbres[256];
+      rh264_intra16x16(P, stride, pred16, have_up, have_left);
+      {
+         int nC = rh264_nC(nz, gw, f->mbh*4, gx0, gy0, slice_first);
+         int32_t scan[16];
+         int tc = rh264_residual_block(b, nC, 16, scan);
+         if (tc < 0) return -1;
+         { const uint8_t *sc = RH264_SCAN4(f);
+           for (i = 0; i < 16; i++) dc[sc[i]] = scan[i]; }
+         if (!tb)
+         {
+            int per = qpc/6, rem = qpc%6;
+            int LS = w4[0]*rh264_dequant4_v[rem][0];
+            rh264_ihadamard4x4(dc, tmp);
+            for (i = 0; i < 16; i++)
+            {
+               if (qpc >= 36)
+                  dc[i] = (int32_t)(((uint32_t)(tmp[i]*LS)) << (per-6));
+               else
+                  dc[i] = (tmp[i]*LS + (1 << (5-per))) >> (6-per);
+            }
+         }
+      }
+      for (i = 0; i < 16; i++)
+      {
+         int bxx = rh264_blk_x[i], byy = rh264_blk_y[i];
+         int gx = gx0 + bxx, gy = gy0 + byy;
+         int32_t ac[16], r[16];
+         int nzc = 0;
+         for (k = 0; k < 16; k++) ac[k] = 0;
+         if (cbp_luma)
+         {
+            int nC = rh264_nC(nz, gw, f->mbh*4, gx, gy, slice_first);
+            int32_t scan[16];
+            int tc = rh264_residual_block(b, nC, 15, scan);
+            if (tc < 0) return -1;
+            nzc = tc;
+            { const uint8_t *sc = RH264_SCAN4(f);
+              for (k = 0; k < 15; k++) ac[sc[k+1]] = scan[k]; }
+         }
+         ac[0] = dc[byy*4 + bxx];
+         if (tb)
+            rh264_tb_put4(tbres, 16, bxx, byy, ac);
+         else
+         {
+            rh264_dequant4x4(ac, qpc, 1, w4);
+            rh264_itransform4x4(ac, r);
+            rh264_add_residual(P + byy*4*stride + bxx*4, stride, r, 4);
+         }
+         nz[gy*gw + gx] = (uint8_t)nzc;
+      }
+      if (tb)
+      {
+         rh264_tb_dpcm(tbres, 16, 16, rh264_tb_luma_dpcm(pred16));
+         rh264_add_bypass(P, stride, tbres, 16, 16, 16);
+      }
+   }
    return 0;
 }
 
@@ -3142,9 +3357,9 @@ static void rh264_filter_chroma_edge_seg(uint8_t *e, int s, int ls, int n,
  * macroblock's edge writes up to three of their samples. */
 typedef struct
 {
-   uint8_t y[16*16], u[8*16], v[8*16];       /* the current macroblock */
+   uint8_t y[16*16], u[16*16], v[16*16];     /* the current macroblock */
    uint8_t ly[16*3], lu[16*3], lv[16*3];     /* left neighbour, 3 columns */
-   uint8_t ty[3*16], tu[3*8], tv[3*8];       /* top neighbour, 3 rows */
+   uint8_t ty[3*16], tu[3*16], tv[3*16];     /* top neighbour, 3 rows */
    int cur, left, top;
 } rh264_tb_save;
 
@@ -3164,7 +3379,7 @@ static void rh264_tb_copy(uint8_t *dst, int dstride, const uint8_t *src,
 static void rh264_tb_deblock_save(const rh264_frame *f, int mbx, int mby,
       rh264_tb_save *s)
 {
-   int ch = f->cmbh;
+   int ch = f->cmbh, cw = f->c444 ? 16 : 8;
    s->cur = s->left = s->top = 0;
    if (!f->tb)
       return;
@@ -3172,46 +3387,46 @@ static void rh264_tb_deblock_save(const rh264_frame *f, int mbx, int mby,
    {
       s->cur = 1;
       rh264_tb_copy(s->y, 16, f->Y + (size_t)mby*16*f->ystride + mbx*16, f->ystride, 16, 16);
-      rh264_tb_copy(s->u, 8,  f->U + (size_t)mby*ch*f->cstride + mbx*8,  f->cstride, 8, ch);
-      rh264_tb_copy(s->v, 8,  f->V + (size_t)mby*ch*f->cstride + mbx*8,  f->cstride, 8, ch);
+      rh264_tb_copy(s->u, cw, f->U + (size_t)mby*ch*f->cstride + mbx*cw, f->cstride, cw, ch);
+      rh264_tb_copy(s->v, cw, f->V + (size_t)mby*ch*f->cstride + mbx*cw, f->cstride, cw, ch);
    }
    if (mbx > 0 && rh264_tb_mb(f, mbx-1, mby))
    {
       s->left = 1;
       rh264_tb_copy(s->ly, 3, f->Y + (size_t)mby*16*f->ystride + mbx*16 - 3, f->ystride, 3, 16);
-      rh264_tb_copy(s->lu, 3, f->U + (size_t)mby*ch*f->cstride + mbx*8 - 3,  f->cstride, 3, ch);
-      rh264_tb_copy(s->lv, 3, f->V + (size_t)mby*ch*f->cstride + mbx*8 - 3,  f->cstride, 3, ch);
+      rh264_tb_copy(s->lu, 3, f->U + (size_t)mby*ch*f->cstride + mbx*cw - 3, f->cstride, 3, ch);
+      rh264_tb_copy(s->lv, 3, f->V + (size_t)mby*ch*f->cstride + mbx*cw - 3, f->cstride, 3, ch);
    }
    if (mby > 0 && rh264_tb_mb(f, mbx, mby-1))
    {
       s->top = 1;
       rh264_tb_copy(s->ty, 16, f->Y + ((size_t)mby*16 - 3)*f->ystride + mbx*16, f->ystride, 16, 3);
-      rh264_tb_copy(s->tu, 8,  f->U + ((size_t)mby*ch - 3)*f->cstride + mbx*8,  f->cstride, 8, 3);
-      rh264_tb_copy(s->tv, 8,  f->V + ((size_t)mby*ch - 3)*f->cstride + mbx*8,  f->cstride, 8, 3);
+      rh264_tb_copy(s->tu, cw, f->U + ((size_t)mby*ch - 3)*f->cstride + mbx*cw, f->cstride, cw, 3);
+      rh264_tb_copy(s->tv, cw, f->V + ((size_t)mby*ch - 3)*f->cstride + mbx*cw, f->cstride, cw, 3);
    }
 }
 
 static void rh264_tb_deblock_restore(rh264_frame *f, int mbx, int mby,
       const rh264_tb_save *s)
 {
-   int ch = f->cmbh;
+   int ch = f->cmbh, cw = f->c444 ? 16 : 8;
    if (s->cur)
    {
       rh264_tb_copy(f->Y + (size_t)mby*16*f->ystride + mbx*16, f->ystride, s->y, 16, 16, 16);
-      rh264_tb_copy(f->U + (size_t)mby*ch*f->cstride + mbx*8,  f->cstride, s->u, 8, 8, ch);
-      rh264_tb_copy(f->V + (size_t)mby*ch*f->cstride + mbx*8,  f->cstride, s->v, 8, 8, ch);
+      rh264_tb_copy(f->U + (size_t)mby*ch*f->cstride + mbx*cw, f->cstride, s->u, cw, cw, ch);
+      rh264_tb_copy(f->V + (size_t)mby*ch*f->cstride + mbx*cw, f->cstride, s->v, cw, cw, ch);
    }
    if (s->left)
    {
       rh264_tb_copy(f->Y + (size_t)mby*16*f->ystride + mbx*16 - 3, f->ystride, s->ly, 3, 3, 16);
-      rh264_tb_copy(f->U + (size_t)mby*ch*f->cstride + mbx*8 - 3,  f->cstride, s->lu, 3, 3, ch);
-      rh264_tb_copy(f->V + (size_t)mby*ch*f->cstride + mbx*8 - 3,  f->cstride, s->lv, 3, 3, ch);
+      rh264_tb_copy(f->U + (size_t)mby*ch*f->cstride + mbx*cw - 3, f->cstride, s->lu, 3, 3, ch);
+      rh264_tb_copy(f->V + (size_t)mby*ch*f->cstride + mbx*cw - 3, f->cstride, s->lv, 3, 3, ch);
    }
    if (s->top)
    {
       rh264_tb_copy(f->Y + ((size_t)mby*16 - 3)*f->ystride + mbx*16, f->ystride, s->ty, 16, 16, 3);
-      rh264_tb_copy(f->U + ((size_t)mby*ch - 3)*f->cstride + mbx*8,  f->cstride, s->tu, 8, 8, 3);
-      rh264_tb_copy(f->V + ((size_t)mby*ch - 3)*f->cstride + mbx*8,  f->cstride, s->tv, 8, 8, 3);
+      rh264_tb_copy(f->U + ((size_t)mby*ch - 3)*f->cstride + mbx*cw, f->cstride, s->tu, cw, cw, 3);
+      rh264_tb_copy(f->V + ((size_t)mby*ch - 3)*f->cstride + mbx*cw, f->cstride, s->tv, cw, cw, 3);
    }
 }
 
@@ -3257,8 +3472,24 @@ static void rh264_deblock(rh264_frame *f, const signed char *sidc,
          a=rh264_alpha[idxA]; be=rh264_beta[idxB]; t=rh264_tc0[bS==4?2:bS-1][idxA];
          rh264_filter_luma_edge_n(f->Y+(mby*16)*f->ystride+x, 1,
                f->ystride, 16, bS, a, be, t);
+         if(f->c444){
+            /* luma-sized chroma, filtered as luma (chromaStyleFiltering
+             * is off for ChromaArrayType 3, 8.7.2) at the chroma qP */
+            int cc;
+            for(cc=0;cc<2;cc++){
+               int coff=cc?f->chroma_qp_offset2:f->chroma_qp_offset;
+               int qc=rh264_chroma_qp(qp,coff);
+               int cqpavg=(edge==0)? ((qc+rh264_chroma_qp(f->mbqp?f->mbqp[mby*f->mbw+mbx-1]:qp,coff)+1)>>1) : qc;
+               int cA=cqpavg+oA,cB=cqpavg+oB,ca,cbe,ct;
+               uint8_t *pl=cc?f->V:f->U;
+               if(cA<0)cA=0;else if(cA>51)cA=51; if(cB<0)cB=0;else if(cB>51)cB=51;
+               ca=rh264_alpha[cA];cbe=rh264_beta[cB];ct=rh264_tc0[bS==4?2:bS-1][cA];
+               rh264_filter_luma_edge_n(pl+(size_t)(mby*16)*f->cstride+x, 1,
+                     f->cstride, 16, bS, ca, cbe, ct);
+            }
+         }
          /* chroma: only on even edges (0 and 8 luma -> chroma 0,4) */
-         if((edge&1)==0){
+         else if((edge&1)==0){
             int cx=mbx*8+(edge>>1)*4, cc;
             for(cc=0;cc<2;cc++){
                int coff=cc?f->chroma_qp_offset2:f->chroma_qp_offset;
@@ -3283,7 +3514,7 @@ static void rh264_deblock(rh264_frame *f, const signed char *sidc,
           * there either, so skipping the whole edge is the same thing;
           * in 4:2:2, which keeps every chroma row, it is not. */
          int do_luma = !(mbt8 && (edge&1));
-         if(!do_luma && f->cmbh!=16) continue;
+         if(!do_luma && (f->cmbh!=16 || f->c444)) continue;
          if(edge==0){ if(mby==0) continue;
             if(sidc[sl]==2 && f->mbslice && f->mbslice[mbi-f->mbw]!=sl)
                continue;   /* no filtering across the slice boundary */
@@ -3299,10 +3530,24 @@ static void rh264_deblock(rh264_frame *f, const signed char *sidc,
          if(do_luma)
             rh264_filter_luma_edge_n(f->Y+y*f->ystride+mbx*16, f->ystride,
                   1, 16, bS, a, be, t);
+         if(f->c444){
+            int cc;
+            for(cc=0;cc<2;cc++){
+               int coff=cc?f->chroma_qp_offset2:f->chroma_qp_offset;
+               int qc=rh264_chroma_qp(qp,coff);
+               int cqpavg=(edge==0)? ((qc+rh264_chroma_qp(f->mbqp?f->mbqp[(mby-1)*f->mbw+mbx]:qp,coff)+1)>>1) : qc;
+               int cA=cqpavg+oA,cB=cqpavg+oB,ca,cbe,ct;
+               uint8_t *pl=cc?f->V:f->U;
+               if(cA<0)cA=0;else if(cA>51)cA=51; if(cB<0)cB=0;else if(cB>51)cB=51;
+               ca=rh264_alpha[cA];cbe=rh264_beta[cB];ct=rh264_tc0[bS==4?2:bS-1][cA];
+               rh264_filter_luma_edge_n(pl+(size_t)y*f->cstride+mbx*16, f->cstride,
+                     1, 16, bS, ca, cbe, ct);
+            }
+         }
          /* chroma has half the luma width but, in 4:2:2, its full
           * height - so every horizontal luma edge has a chroma edge
           * to match, where 4:2:0 has one for every second. */
-         if((edge&1)==0 || f->cmbh==16){
+         else if((edge&1)==0 || f->cmbh==16){
             int cy=mby*f->cmbh+((f->cmbh==16)?edge*4:(edge>>1)*4), cc;
             for(cc=0;cc<2;cc++){
                int coff=cc?f->chroma_qp_offset2:f->chroma_qp_offset;
@@ -3344,8 +3589,8 @@ static int rh264_decode_intra_mb_cavlc(rh264_bits *b, rh264_frame *f,
       && nb_ul >= slice_first && nb_ul < mbaddr;
    int gw=f->mbw*4, cgw=f->mbw*2;
    uint8_t *y=f->Y+(mby*16)*f->ystride+mbx*16;
-   uint8_t *u=f->U+(mby*f->cmbh)*f->cstride+mbx*8;
-   uint8_t *v=f->V+(mby*f->cmbh)*f->cstride+mbx*8;
+   uint8_t *u=f->U+(mby*f->cmbh)*f->cstride+mbx*(f->c444?16:8);
+   uint8_t *v=f->V+(mby*f->cmbh)*f->cstride+mbx*(f->c444?16:8);
 
    /* where the picture forbids predicting from inter samples, an
     * inter-coded neighbour is not available to predict from at all
@@ -3379,8 +3624,13 @@ static int rh264_decode_intra_mb_cavlc(rh264_bits *b, rh264_frame *f,
             { int cy,cx; for (cy = 0; cy < 2; cy++)for(cx=0;cx<2;cx++)
                  f->i4mode[(cgy+cy)*gw+cgx+cx]=(uint8_t)predm; }
          }
-         chroma_mode=rh264_ue(b);
-         cbp=rh264_ue(b); if((unsigned)cbp>=48)return -3; cbp=rh264_cbp_intra[cbp];
+         /* no intra_chroma_pred_mode in 4:4:4: the chroma planes take
+          * the luma modes; and the coded_block_pattern has luma bits
+          * only (Table 9-4, ChromaArrayType 3 column) */
+         chroma_mode=f->c444?0:rh264_ue(b);
+         cbp=rh264_ue(b);
+         if(f->c444){ if((unsigned)cbp>=16)return -3; cbp=rh264_cbp_intra_noc[cbp]; }
+         else { if((unsigned)cbp>=48)return -3; cbp=rh264_cbp_intra[cbp]; }
          cbp_luma=cbp&15; cbp_chroma=cbp>>4;
          if(cbp_luma||cbp_chroma){ int d=rh264_se(b);
             if(rh264_qp_apply_delta(f,d)) return -1; }
@@ -3400,6 +3650,12 @@ static int rh264_decode_intra_mb_cavlc(rh264_bits *b, rh264_frame *f,
             } else { int cy,cx; for (cy = 0; cy < 2; cy++)for(cx=0;cx<2;cx++)
                f->nzL[(mby*4+by8*2+cy)*gw+mbx*4+bx8*2+cx]=0; }
          }
+         if(f->c444){
+            if(rh264_cavlc_intra_plane444(b,f,0,mbx,mby,1,modes,0,cbp_luma,
+                  have_up,have_left,have_ur,have_ul,slice_first)<0) return -1;
+            if(rh264_cavlc_intra_plane444(b,f,1,mbx,mby,1,modes,0,cbp_luma,
+                  have_up,have_left,have_ur,have_ul,slice_first)<0) return -1;
+         } else {
          rh264_intra_chroma_h(u,f->cstride,chroma_mode,have_up,have_left,f->cmbh);
          rh264_intra_chroma_h(v,f->cstride,chroma_mode,have_up,have_left,f->cmbh);
          if(cbp_chroma) {
@@ -3410,6 +3666,7 @@ static int rh264_decode_intra_mb_cavlc(rh264_bits *b, rh264_frame *f,
          if(!cbp_chroma){ int cx,cy; for (cy = 0; cy < f->cmbh/4; cy++)for(cx=0;cx<2;cx++){
             f->nzC[0][(mby*(f->cmbh/4)+cy)*cgw+mbx*2+cx]=0;
             f->nzC[1][(mby*(f->cmbh/4)+cy)*cgw+mbx*2+cx]=0; } }
+         }
       }
       else if(mb_type==0){
          /* I_4x4 */
@@ -3436,8 +3693,10 @@ static int rh264_decode_intra_mb_cavlc(rh264_bits *b, rh264_frame *f,
             else { int rem=rh264_un(b,3); predm=(rem<mpm)?rem:rem+1; }
             modes[i]=predm; f->i4mode[gy*gw+gx]=(uint8_t)predm;
          }
-         chroma_mode=rh264_ue(b);
-         cbp=rh264_ue(b); if((unsigned)cbp>=48)return -3; cbp=rh264_cbp_intra[cbp];
+         chroma_mode=f->c444?0:rh264_ue(b);
+         cbp=rh264_ue(b);
+         if(f->c444){ if((unsigned)cbp>=16)return -3; cbp=rh264_cbp_intra_noc[cbp]; }
+         else { if((unsigned)cbp>=48)return -3; cbp=rh264_cbp_intra[cbp]; }
          cbp_luma=cbp&15; cbp_chroma=cbp>>4;
          if(cbp_luma||cbp_chroma){ int d=rh264_se(b);
             if(rh264_qp_apply_delta(f,d)) return -1; }
@@ -3497,6 +3756,12 @@ static int rh264_decode_intra_mb_cavlc(rh264_bits *b, rh264_frame *f,
                f->nzL[gy*gw+gx]=(uint8_t)nzc;
             }
          }
+         if(f->c444){
+            if(rh264_cavlc_intra_plane444(b,f,0,mbx,mby,0,modes,0,cbp_luma,
+                  have_up,have_left,have_ur,have_ul,slice_first)<0) return -1;
+            if(rh264_cavlc_intra_plane444(b,f,1,mbx,mby,0,modes,0,cbp_luma,
+                  have_up,have_left,have_ur,have_ul,slice_first)<0) return -1;
+         } else {
          /* chroma predict */
          rh264_intra_chroma_h(u,f->cstride,chroma_mode,have_up,have_left,f->cmbh);
          rh264_intra_chroma_h(v,f->cstride,chroma_mode,have_up,have_left,f->cmbh);
@@ -3509,6 +3774,7 @@ static int rh264_decode_intra_mb_cavlc(rh264_bits *b, rh264_frame *f,
          if(!cbp_chroma){ int cx,cy; for (cy = 0; cy < f->cmbh/4; cy++)for(cx=0;cx<2;cx++){
             f->nzC[0][(mby*(f->cmbh/4)+cy)*cgw+mbx*2+cx]=0;
             f->nzC[1][(mby*(f->cmbh/4)+cy)*cgw+mbx*2+cx]=0; } }
+         }
       }
       else if(mb_type>=1&&mb_type<=24){
          int m=mb_type-1, pred=m%4, cbp_chroma=(m/4)%3, cbp_luma=(m>=12)?15:0;
@@ -3517,7 +3783,7 @@ static int rh264_decode_intra_mb_cavlc(rh264_bits *b, rh264_frame *f,
          int chroma_mode;
          int tb; int32_t tbres[256];
          rh264_intra16x16(y,f->ystride,pred,have_up,have_left);
-         chroma_mode=rh264_ue(b);
+         chroma_mode=f->c444?0:rh264_ue(b);
          { int d=rh264_se(b);
            if(rh264_qp_apply_delta(f,d)) return -1; }
          /* luma DC (Hadamard) */
@@ -3568,11 +3834,18 @@ static int rh264_decode_intra_mb_cavlc(rh264_bits *b, rh264_frame *f,
             rh264_add_bypass(y,f->ystride,tbres,16,16,16);
          }
          (void)bx;(void)by;
+         if(f->c444){
+            if(rh264_cavlc_intra_plane444(b,f,0,mbx,mby,2,NULL,pred,cbp_luma,
+                  have_up,have_left,have_ur,have_ul,slice_first)<0) return -1;
+            if(rh264_cavlc_intra_plane444(b,f,1,mbx,mby,2,NULL,pred,cbp_luma,
+                  have_up,have_left,have_ur,have_ul,slice_first)<0) return -1;
+         } else {
          rh264_intra_chroma_h(u,f->cstride,chroma_mode,have_up,have_left,f->cmbh);
          rh264_intra_chroma_h(v,f->cstride,chroma_mode,have_up,have_left,f->cmbh);
          if(cbp_chroma){ if(rh264_decode_chroma_residual(b,f,mbx,mby,u,v,
                cbp_chroma,slice_first,0,rh264_tb_chroma_dpcm(chroma_mode))<0)
             return -1; }
+         }
          /* an uncoded chroma block still has a coefficient count - zero -
           * and the neighbouring blocks' nC derivation (9.2.1) reads it.
           * The other intra branches record it; without this the counts
@@ -3580,7 +3853,7 @@ static int rh264_decode_intra_mb_cavlc(rh264_bits *b, rh264_frame *f,
           * read instead, which after an IDR is the freshly cleared grid
           * (zero, coincidentally right) but on any later picture is the
           * previous picture's counts. */
-         if(!cbp_chroma){ int cx,cy; for (cy = 0; cy < f->cmbh/4; cy++)for(cx=0;cx<2;cx++){
+         if(!cbp_chroma&&!f->c444){ int cx,cy; for (cy = 0; cy < f->cmbh/4; cy++)for(cx=0;cx<2;cx++){
             f->nzC[0][(mby*(f->cmbh/4)+cy)*cgw+mbx*2+cx]=0;
             f->nzC[1][(mby*(f->cmbh/4)+cy)*cgw+mbx*2+cx]=0; } }
       }
@@ -3592,19 +3865,22 @@ static int rh264_decode_intra_mb_cavlc(rh264_bits *b, rh264_frame *f,
          /* a macroblock carries 256 luma samples and, per chroma
           * component, eight columns by as many rows as the format
           * gives it - eight for 4:2:0, sixteen for 4:2:2 */
-         int r,c2,ch=f->cmbh;
+         int r,c2,ch=f->cmbh,cw=f->c444?16:8;
          b->bitpos=(b->bitpos+7)&~(size_t)7;
-         if((b->size*8-b->bitpos)>>3 < 256+(size_t)ch*8*2) return -1;
+         if((b->size*8-b->bitpos)>>3 < 256+(size_t)ch*cw*2) return -1;
          for(r=0;r<16;r++)for(c2=0;c2<16;c2++)
             y[r*f->ystride+c2]=(uint8_t)rh264_un(b,8);
-         for(r=0;r<ch;r++)for(c2=0;c2<8;c2++)
+         for(r=0;r<ch;r++)for(c2=0;c2<cw;c2++)
             u[r*f->cstride+c2]=(uint8_t)rh264_un(b,8);
-         for(r=0;r<ch;r++)for(c2=0;c2<8;c2++)
+         for(r=0;r<ch;r++)for(c2=0;c2<cw;c2++)
             v[r*f->cstride+c2]=(uint8_t)rh264_un(b,8);
          for(r=0;r<4;r++)for(c2=0;c2<4;c2++){
             f->nzL[(mby*4+r)*gw+mbx*4+c2]=16;
             f->i4mode[(mby*4+r)*gw+mbx*4+c2]=0xff;
+            if(f->c444){ f->nzC[0][(mby*4+r)*gw+mbx*4+c2]=16;
+                         f->nzC[1][(mby*4+r)*gw+mbx*4+c2]=16; }
          }
+         if(!f->c444)
          for (r = 0; r < f->cmbh/4; r++)for(c2=0;c2<2;c2++){
             f->nzC[0][(mby*(f->cmbh/4)+r)*cgw+mbx*2+c2]=16;
             f->nzC[1][(mby*(f->cmbh/4)+r)*cgw+mbx*2+c2]=16;
@@ -4494,6 +4770,17 @@ static void rh264_inter_pred_block(rh264_frame *f, const rh264_frame *ref,
    uint8_t *dY = f->Y + oy * f->ystride + ox;
    rh264_mc_luma(dY, f->ystride, ref->Y, ref->ystride, rw, rh,
          ox, oy, bw, bh, mvx, mvy);
+   if (f->c444)
+   {
+      /* 4:4:4: the chroma planes are luma-sized and are predicted
+       * exactly as luma is (8.4.2.2, ChromaArrayType 3: the luma
+       * sample interpolation, the luma vector) */
+      rh264_mc_luma(f->U + oy * f->cstride + ox, f->cstride, ref->U,
+            ref->cstride, rw, rh, ox, oy, bw, bh, mvx, mvy);
+      rh264_mc_luma(f->V + oy * f->cstride + ox, f->cstride, ref->V,
+            ref->cstride, rw, rh, ox, oy, bw, bh, mvx, mvy);
+   }
+   else
    {
       /* 4:2:2 halves the width but keeps the height, so its chroma
        * blocks are as tall as the luma ones and a luma vector spans
@@ -4525,6 +4812,30 @@ static void rh264_inter_pred_block(rh264_frame *f, const rh264_frame *ref,
 
 
 /* ==================== rh264_pdrive.h ==================== */
+/* A macroblock without chroma residual still records coefficient
+ * counts of zero (9.2.1 reads them from the neighbours): two chroma
+ * block columns by cmbh/4 rows in 4:2:x, the luma-shaped grids in
+ * 4:4:4. */
+static void rh264_nzc_clear(rh264_frame *f, int mbx, int mby)
+{
+   int cx, cy;
+   if (f->c444)
+   {
+      int gw = f->mbw * 4;
+      for (cy = 0; cy < 4; cy++) for (cx = 0; cx < 4; cx++)
+      {
+         f->nzC[0][(mby*4+cy)*gw + mbx*4+cx] = 0;
+         f->nzC[1][(mby*4+cy)*gw + mbx*4+cx] = 0;
+      }
+      return;
+   }
+   for (cy = 0; cy < f->cmbh/4; cy++) for (cx = 0; cx < 2; cx++)
+   {
+      f->nzC[0][(mby*(f->cmbh/4)+cy)*(f->mbw*2) + mbx*2+cx] = 0;
+      f->nzC[1][(mby*(f->cmbh/4)+cy)*(f->mbw*2) + mbx*2+cx] = 0;
+   }
+}
+
 /* CBP mapping for Inter macroblocks: codeNum -> cbp (Table 9-4, inter col). */
 static const uint8_t rh264_cbp_inter[48]={
    0,16,1,2,4,8,32,3,5,10,12,15,47,7,11,13,14,6,9,31,35,37,42,44,33,34,36,40,
@@ -4532,11 +4843,19 @@ static const uint8_t rh264_cbp_inter[48]={
 
 /* Reconstruct the 16 luma 4x4 residual blocks of an inter MB on top of the
  * already motion-compensated prediction in the current frame. */
-static int rh264_inter_luma_residual(rh264_bits *b, rh264_frame *f,
-      int mbx, int mby, int cbp_luma, int t8, int slice_first)
+/* The sixteen 4x4 (or four 8x8) residual blocks of one luma-coded plane
+ * of an inter macroblock, added to the motion-compensated prediction
+ * already in the frame.  Luma passes its own plane, counts and
+ * matrices; in 4:4:4 Cb and Cr go through here too (7.3.5.3
+ * residual_luma, after luma), with the chroma qP and the inter chroma
+ * weight matrices. */
+static int rh264_inter_plane_residual(rh264_bits *b, rh264_frame *f,
+      uint8_t *plane, int stride, uint8_t *nz, const uint8_t *w4,
+      const uint8_t *w8, int qp, int mbx, int mby, int cbp_luma, int t8,
+      int slice_first)
 {
    int gw = f->mbw * 4;
-   uint8_t *y = f->Y + (mby * 16) * f->ystride + mbx * 16;
+   uint8_t *y = plane + (size_t)(mby * 16) * stride + mbx * 16;
    int i;
    if (t8)
    {
@@ -4545,14 +4864,16 @@ static int rh264_inter_luma_residual(rh264_bits *b, rh264_frame *f,
       {
          if (cbp_luma & (1 << b8))
          {
-            if (rh264_cavlc_luma8x8(b, f, mbx, mby, b8, slice_first, 0, 0) < 0)
+            uint8_t *d = y + (b8 >> 1) * 8 * stride + (b8 & 1) * 8;
+            if (rh264_cavlc_plane8x8(b, f, d, stride, nz, w8, qp,
+                     mbx, mby, b8, slice_first, 0) < 0)
                return -1;
          }
          else
          {
             int cy, cx;
             for (cy = 0; cy < 2; cy++) for (cx = 0; cx < 2; cx++)
-               f->nzL[(mby*4 + (b8>>1)*2 + cy) * gw
+               nz[(mby*4 + (b8>>1)*2 + cy) * gw
                       + mbx*4 + (b8&1)*2 + cx] = 0;
          }
       }
@@ -4562,11 +4883,11 @@ static int rh264_inter_luma_residual(rh264_bits *b, rh264_frame *f,
    {
       int bx = rh264_blk_x[i], by = rh264_blk_y[i];
       int gx = mbx * 4 + bx, gy = mby * 4 + by;
-      uint8_t *d = y + by * 4 * f->ystride + bx * 4;
+      uint8_t *d = y + by * 4 * stride + bx * 4;
       int nzc = 0;
       if (cbp_luma & (1 << (i >> 2)))
       {
-         int nC = rh264_nC(f->nzL, gw, f->mbh * 4, gx, gy, slice_first);
+         int nC = rh264_nC(nz, gw, f->mbh * 4, gx, gy, slice_first);
          int32_t scan[16], coef[16], r[16]; int k, tc;
          for (k = 0; k < 16; k++) coef[k] = 0;
          tc = rh264_residual_block(b, nC, 16, scan);
@@ -4576,15 +4897,39 @@ static int rh264_inter_luma_residual(rh264_bits *b, rh264_frame *f,
          { const uint8_t *sc = RH264_SCAN4(f);
            for (k = 0; k < 16; k++) coef[sc[k]] = scan[k]; }
          if (RH264_TB(f))
-            rh264_add_bypass(d, f->ystride, coef, 4, 4, 4);
+            rh264_add_bypass(d, stride, coef, 4, 4, 4);
          else
          {
-            rh264_dequant4x4(coef, f->qp, 0, f->w4[3]);
+            rh264_dequant4x4(coef, qp, 0, w4);
             rh264_itransform4x4(coef, r);
-            rh264_add_residual(d, f->ystride, r, 4);
+            rh264_add_residual(d, stride, r, 4);
          }
       }
-      f->nzL[gy * gw + gx] = (uint8_t)nzc;
+      nz[gy * gw + gx] = (uint8_t)nzc;
+   }
+   return 0;
+}
+
+static int rh264_inter_luma_residual(rh264_bits *b, rh264_frame *f,
+      int mbx, int mby, int cbp_luma, int t8, int slice_first)
+{
+   return rh264_inter_plane_residual(b, f, f->Y, f->ystride, f->nzL,
+         f->w4[3], f->w8[1], f->qp, mbx, mby, cbp_luma, t8, slice_first);
+}
+
+/* 4:4:4: Cb then Cr of an inter macroblock, as luma. */
+static int rh264_inter_chroma444_residual(rh264_bits *b, rh264_frame *f,
+      int mbx, int mby, int cbp_luma, int t8, int slice_first)
+{
+   int comp;
+   for (comp = 0; comp < 2; comp++)
+   {
+      int qpc = rh264_chroma_qp(f->qp,
+            comp ? f->chroma_qp_offset2 : f->chroma_qp_offset);
+      if (rh264_inter_plane_residual(b, f, comp ? f->V : f->U, f->cstride,
+               f->nzC[comp], f->w4[4 + comp], f->w8[3 + 2*comp], qpc,
+               mbx, mby, cbp_luma, t8, slice_first) < 0)
+         return -1;
    }
    return 0;
 }
@@ -4773,7 +5118,12 @@ static void rh264_weight_pred(rh264_frame *f, const rh264_slice_hdr *sh,
       rh264_wp_row(f->Y + (oy+y)*f->ystride + ox, bw, lw,
             ld >= 1 ? 1 << (ld-1) : 0, ld, lo);
    {
-      int cox = ox >> 1, coy = oy >> 1, cbw = bw >> 1, cbh = bh >> 1, c;
+      /* 4:2:2 keeps the luma height; 4:4:4 the luma width too */
+      int c422 = (f->cmbh == 16) && !f->c444;
+      int cox = f->c444 ? ox : (ox >> 1);
+      int coy = (f->c444 || c422) ? oy : (oy >> 1);
+      int cbw = f->c444 ? bw : (bw >> 1);
+      int cbh = (f->c444 || c422) ? bh : (bh >> 1), c;
       int cd = sh->chroma_log2_denom;
       uint8_t *planes[2];
       planes[0] = f->U; planes[1] = f->V;
@@ -4913,9 +5263,7 @@ static int rh264_decode_pslice(rh264_bits *b, const rh264_sps *sps,
          /* skip MBs carry no residual */
          { int cx, cy; for (cy = 0; cy < 4; cy++) for (cx = 0; cx < 4; cx++)
               f->nzL[(mby * 4 + cy) * gw + mbx * 4 + cx] = 0; }
-         { int cx, cy; for (cy = 0; cy < f->cmbh/4; cy++) for (cx = 0; cx < 2; cx++) {
-              f->nzC[0][(mby*(f->cmbh/4)+cy)*cgw + mbx * 2 + cx] = 0;
-              f->nzC[1][(mby*(f->cmbh/4)+cy)*cgw + mbx * 2 + cx] = 0; } }
+         rh264_nzc_clear(f, mbx, mby);
          f->mbqp[mby * f->mbw + mbx] = (uint8_t)f->qp;
          skip_run--; mbaddr++;
          prev_skipped = 1;
@@ -5020,8 +5368,8 @@ static int rh264_decode_pslice(rh264_bits *b, const rh264_sps *sps,
 
          /* coded_block_pattern */
          cbp = rh264_ue(b);
-         if ((unsigned)cbp >= 48) { return -3; }
-         cbp = rh264_cbp_inter[cbp];
+         if (f->c444) { if ((unsigned)cbp >= 16) return -3; cbp = rh264_cbp_inter_noc[cbp]; }
+         else { if ((unsigned)cbp >= 48) { return -3; } cbp = rh264_cbp_inter[cbp]; }
          cbp_luma = cbp & 15; cbp_chroma = cbp >> 4;
          /* transform_size_8x8_flag sits between the cbp and mb_qp_delta
           * (7.3.5) and is only coded when the partitioning allows it */
@@ -5037,18 +5385,19 @@ static int rh264_decode_pslice(rh264_bits *b, const rh264_sps *sps,
          }
          if (rh264_inter_luma_residual(b, f, mbx, mby, cbp_luma, t8,
                sh->first_mb_in_slice) < 0) return -1;
-         if (cbp_chroma)
+         if (f->c444)
+         {
+            if (rh264_inter_chroma444_residual(b, f, mbx, mby, cbp_luma, t8,
+                  sh->first_mb_in_slice) < 0) return -1;
+         }
+         else if (cbp_chroma)
          {
             if (rh264_decode_chroma_residual(b, f, mbx, mby, u, v, cbp_chroma,
                   sh->first_mb_in_slice, 1, 0) < 0)
                return -1;
          }
          else
-         {
-            int cx, cy; for (cy = 0; cy < f->cmbh/4; cy++) for (cx = 0; cx < 2; cx++) {
-               f->nzC[0][(mby*(f->cmbh/4)+cy)*cgw + mbx * 2 + cx] = 0;
-               f->nzC[1][(mby*(f->cmbh/4)+cy)*cgw + mbx * 2 + cx] = 0; }
-         }
+            rh264_nzc_clear(f, mbx, mby);
          f->mbqp[mby * f->mbw + mbx] = (uint8_t)f->qp;
       }
       mbaddr++;
@@ -5161,7 +5510,7 @@ static void rh264_b_setup_scales(rh264_bctx *bc)
  * line apart (8.4.1.4). */
 static void rh264_b_mc_tmp(uint8_t *ty, uint8_t *tu, uint8_t *tv,
       const rh264_frame *ref, int ox, int oy, int bw, int bh,
-      int mvx, int mvy, int curfield, int c422)
+      int mvx, int mvy, int curfield, int c422, int c444)
 {
    int rw = ref->mbw * 16, rh = ref->mbh * 16;
    int cmvy = mvy;
@@ -5169,6 +5518,15 @@ static void rh264_b_mc_tmp(uint8_t *ty, uint8_t *tu, uint8_t *tv,
       cmvy += (curfield == 1) ? -2 : 2;
    rh264_mc_luma(ty, 16, ref->Y, ref->ystride, rw, rh, ox, oy, bw, bh,
          mvx, mvy);
+   if (c444)
+   {
+      /* luma-sized chroma, luma interpolation, 16-wide scratch */
+      rh264_mc_luma(tu, 16, ref->U, ref->cstride, rw, rh, ox, oy, bw, bh,
+            mvx, mvy);
+      rh264_mc_luma(tv, 16, ref->V, ref->cstride, rw, rh, ox, oy, bw, bh,
+            mvx, mvy);
+      return;
+   }
    /* 4:2:2 keeps the luma height: the chroma block is as tall as the
     * luma one and the vector spans twice the eighths vertically. */
    if (c422) cmvy = mvy * 2;   /* and no parity offset: see above */
@@ -5198,7 +5556,11 @@ static void rh264_weight_pred_list(rh264_frame *f, const rh264_slice_hdr *sh,
       rh264_wp_row(f->Y + (oy+y)*f->ystride + ox, bw, lw,
             ld >= 1 ? 1 << (ld-1) : 0, ld, lo);
    {
-      int cox = ox >> 1, coy = oy >> 1, cbw = bw >> 1, cbh = bh >> 1, c;
+      int c422 = (f->cmbh == 16) && !f->c444;
+      int cox = f->c444 ? ox : (ox >> 1);
+      int coy = (f->c444 || c422) ? oy : (oy >> 1);
+      int cbw = f->c444 ? bw : (bw >> 1);
+      int cbh = (f->c444 || c422) ? bh : (bh >> 1), c;
       int cd = sh->chroma_log2_denom;
       uint8_t *planes[2];
       planes[0] = f->U; planes[1] = f->V;
@@ -5223,17 +5585,20 @@ static void rh264_b_pred_block(rh264_frame *f, const rh264_bctx *bc,
    int ox = mbx*16 + bx, oy = mby*16 + by;
    if (r0 >= 0 && r1 >= 0)
    {
-      /* chroma temporaries hold 8x8 for 4:2:0 and 8x16 for 4:2:2 */
-      uint8_t t0y[256], t0u[128], t0v[128];
-      uint8_t t1y[256], t1u[128], t1v[128];
+      /* chroma temporaries hold 8x8 for 4:2:0, 8x16 for 4:2:2 and
+       * 16x16 (stride 16) for 4:4:4 */
+      uint8_t t0y[256], t0u[256], t0v[256];
+      uint8_t t1y[256], t1u[256], t1v[256];
       int x, y, c;
-      int c422 = (f->cmbh == 16);
-      int cox = ox >> 1, coy = c422 ? oy : (oy >> 1);
-      int cbw = bw >> 1, cbh = c422 ? bh : (bh >> 1);
+      int c444 = f->c444;
+      int c422 = (f->cmbh == 16) && !c444;
+      int cs  = c444 ? 16 : 8;
+      int cox = c444 ? ox : (ox >> 1), coy = (c422 || c444) ? oy : (oy >> 1);
+      int cbw = c444 ? bw : (bw >> 1), cbh = (c422 || c444) ? bh : (bh >> 1);
       rh264_b_mc_tmp(t0y, t0u, t0v, bc->l0[r0], ox, oy, bw, bh, mv0x, mv0y,
-            f->field, c422);
+            f->field, c422, c444);
       rh264_b_mc_tmp(t1y, t1u, t1v, bc->l1[r1], ox, oy, bw, bh, mv1x, mv1y,
-            f->field, c422);
+            f->field, c422, c444);
       if (bc->wbidc == 1 && sh->wp_valid)
       {
          int ld = sh->luma_log2_denom, cd = sh->chroma_log2_denom;
@@ -5251,7 +5616,7 @@ static void rh264_b_pred_block(rh264_frame *f, const rh264_bctx *bc,
             int co  = (sh->wp_co[r0 > 31 ? 31 : r0][c]
                      + sh->wp1_co[r1 > 31 ? 31 : r1][c] + 1) >> 1;
             rh264_bi_block(pl + coy*f->cstride + cox, f->cstride,
-                  s0, 8, s1, 8, cbw, cbh, cw0, cw1, 1 << cd, cd + 1, co);
+                  s0, cs, s1, cs, cbw, cbh, cw0, cw1, 1 << cd, cd + 1, co);
          }
       }
       else if (bc->wbidc == 2)
@@ -5265,7 +5630,7 @@ static void rh264_b_pred_block(rh264_frame *f, const rh264_bctx *bc,
             const uint8_t *s0 = c ? t0v : t0u, *s1 = c ? t1v : t1u;
             uint8_t *pl = c ? f->V : f->U;
             rh264_bi_block(pl + coy*f->cstride + cox, f->cstride,
-                  s0, 8, s1, 8, cbw, cbh, w0, w1, 32, 6, 0);
+                  s0, cs, s1, cs, cbw, cbh, w0, w1, 32, 6, 0);
          }
       }
       else
@@ -5311,16 +5676,16 @@ static void rh264_b_pred_block(rh264_frame *f, const rh264_bctx *bc,
 #ifdef RH264_SSE2
                for (; x + 4 <= cbw; x += 4)
                   rh264_sse2_store4(d + x, _mm_avg_epu8(
-                        rh264_sse2_load4(s0 + y*8 + x),
-                        rh264_sse2_load4(s1 + y*8 + x)));
+                        rh264_sse2_load4(s0 + y*cs + x),
+                        rh264_sse2_load4(s1 + y*cs + x)));
 #elif defined(RH264_NEON)
                for (; x + 4 <= cbw; x += 4)
                   rh264_neon_store4(d + x, vrhadd_u8(
-                        rh264_neon_load4(s0 + y*8 + x),
-                        rh264_neon_load4(s1 + y*8 + x)));
+                        rh264_neon_load4(s0 + y*cs + x),
+                        rh264_neon_load4(s1 + y*cs + x)));
 #endif
                for (; x < cbw; x++)
-                  d[x] = (uint8_t)((s0[y*8+x] + s1[y*8+x] + 1) >> 1);
+                  d[x] = (uint8_t)((s0[y*cs+x] + s1[y*cs+x] + 1) >> 1);
             }
          }
       }
@@ -5691,9 +6056,7 @@ static int rh264_decode_bslice(rh264_bits *b, const rh264_sps *sps,
          rh264_inter_clear_i4mode(f, mbx, mby);
          { int cx, cy; for (cy = 0; cy < 4; cy++) for (cx = 0; cx < 4; cx++)
               f->nzL[(mby * 4 + cy) * gw + mbx * 4 + cx] = 0; }
-         { int cx, cy; for (cy = 0; cy < f->cmbh/4; cy++) for (cx = 0; cx < 2; cx++) {
-              f->nzC[0][(mby*(f->cmbh/4)+cy)*cgw + mbx * 2 + cx] = 0;
-              f->nzC[1][(mby*(f->cmbh/4)+cy)*cgw + mbx * 2 + cx] = 0; } }
+         rh264_nzc_clear(f, mbx, mby);
          f->mbqp[mby * f->mbw + mbx] = (uint8_t)f->qp;
          skip_run--; mbaddr++;
          prev_skipped = 1;
@@ -5912,8 +6275,8 @@ static int rh264_decode_bslice(rh264_bits *b, const rh264_sps *sps,
          }
 
          cbp = rh264_ue(b);
-         if ((unsigned)cbp >= 48) return -3;
-         cbp = rh264_cbp_inter[cbp];
+         if (f->c444) { if ((unsigned)cbp >= 16) return -3; cbp = rh264_cbp_inter_noc[cbp]; }
+         else { if ((unsigned)cbp >= 48) return -3; cbp = rh264_cbp_inter[cbp]; }
          cbp_luma = cbp & 15; cbp_chroma = cbp >> 4;
          /* transform_size_8x8_flag sits between the cbp and mb_qp_delta
           * (7.3.5) and is only coded when the partitioning allows it */
@@ -5929,18 +6292,19 @@ static int rh264_decode_bslice(rh264_bits *b, const rh264_sps *sps,
          }
          if (rh264_inter_luma_residual(b, f, mbx, mby, cbp_luma, t8,
                sh->first_mb_in_slice) < 0) return -1;
-         if (cbp_chroma)
+         if (f->c444)
+         {
+            if (rh264_inter_chroma444_residual(b, f, mbx, mby, cbp_luma, t8,
+                  sh->first_mb_in_slice) < 0) return -1;
+         }
+         else if (cbp_chroma)
          {
             if (rh264_decode_chroma_residual(b, f, mbx, mby, u, v, cbp_chroma,
                   sh->first_mb_in_slice, 1, 0) < 0)
                return -1;
          }
          else
-         {
-            int cx, cy; for (cy = 0; cy < f->cmbh/4; cy++) for (cx = 0; cx < 2; cx++) {
-               f->nzC[0][(mby*(f->cmbh/4)+cy)*cgw + mbx * 2 + cx] = 0;
-               f->nzC[1][(mby*(f->cmbh/4)+cy)*cgw + mbx * 2 + cx] = 0; }
-         }
+            rh264_nzc_clear(f, mbx, mby);
          f->mbqp[mby * f->mbw + mbx] = (uint8_t)f->qp;
       }
       mbaddr++;
@@ -6017,6 +6381,11 @@ static RH264_INLINE int rh264_inter_bs(int mbedge, int intra_p, int intra_q,
 static RH264_INLINE int rh264_bs_nz(const rh264_frame *f, int gw,
       int gx, int gy)
 {
+   /* Luma coefficients only, in every chroma format: bS 2 asks about
+    * the luma transform block containing the sample (8.7.2.1), and the
+    * one strength then serves the chroma planes too, in 4:4:4 as in
+    * 4:2:x (ffmpeg agrees; a derivation that also counted Cb / Cr
+    * coefficients did not). */
    if (f->mbt8 && f->mbt8[(gy >> 2) * f->mbw + (gx >> 2)])
    {
       int bx = gx & ~1, by = gy & ~1;
@@ -6151,11 +6520,38 @@ static void rh264_deblock_pslice(rh264_frame *f, const signed char *sidc,
                seg++;
             }
          }
+         if (f->c444)
+         {
+            /* luma-sized chroma, filtered as luma at the chroma qP,
+             * the same per-segment strengths */
+            int cc;
+            for (cc = 0; cc < 2; cc++)
+            {
+               int coff = cc?f->chroma_qp_offset2:f->chroma_qp_offset;
+               int qc = rh264_chroma_qp(qp, coff);
+               int cqpavg = mbedge ?
+                  ((qc + rh264_chroma_qp(qpp,coff) + 1)>>1) : qc;
+               int cA=cqpavg+oA, cB=cqpavg+oB, ca, cbe;
+               uint8_t *pl = cc?f->V:f->U;
+               if(cA<0)cA=0; else if(cA>51)cA=51;
+               if(cB<0)cB=0; else if(cB>51)cB=51;
+               ca=rh264_alpha[cA]; cbe=rh264_beta[cB];
+               for (seg = 0; seg < 4; seg++)
+               {
+                  int ct;
+                  if (!vbS[seg]) continue;
+                  ct = rh264_tc0[vbS[seg]==4?2:vbS[seg]-1][cA];
+                  rh264_filter_luma_edge_n(
+                        pl + (size_t)(mby*16+seg*4)*f->cstride + x, 1,
+                        f->cstride, 4, vbS[seg], ca, cbe, ct);
+               }
+            }
+         }
          /* chroma on even luma edges: the whole chroma edge in one
           * pass, lanes carrying each luma segment's strength and tc
           * (4:2:2 keeps the luma height, so a segment covers twice as
           * many chroma rows) */
-         if ((edge&1)==0 && (vbS[0]|vbS[1]|vbS[2]|vbS[3]))
+         else if ((edge&1)==0 && (vbS[0]|vbS[1]|vbS[2]|vbS[3]))
          {
             int cx = mbx*8 + (edge>>1)*4, cc;
             for (cc = 0; cc < 2; cc++)
@@ -6191,7 +6587,7 @@ static void rh264_deblock_pslice(rh264_frame *f, const signed char *sidc,
          /* the 8x8 transform removes the LUMA edges inside each block,
           * not the chroma ones - which 4:2:2 has at every luma edge */
          int do_luma = !(mbt8 && (edge & 1));
-         if (!do_luma && f->cmbh != 16) continue;
+         if (!do_luma && (f->cmbh != 16 || f->c444)) continue;
          if (mbedge && mby == 0) continue;
          if (mbedge && sidc[sl] == 2 && f->mbslice
                && f->mbslice[mbi-f->mbw] != sl)
@@ -6239,9 +6635,34 @@ static void rh264_deblock_pslice(rh264_frame *f, const signed char *sidc,
                seg++;
             }
          }
+         if (f->c444)
+         {
+            int cc;
+            for (cc = 0; cc < 2; cc++)
+            {
+               int coff = cc?f->chroma_qp_offset2:f->chroma_qp_offset;
+               int qc = rh264_chroma_qp(qp, coff);
+               int cqpavg = mbedge ?
+                  ((qc + rh264_chroma_qp(qpp,coff) + 1)>>1) : qc;
+               int cA=cqpavg+oA, cB=cqpavg+oB, ca, cbe;
+               uint8_t *pl = cc?f->V:f->U;
+               if(cA<0)cA=0; else if(cA>51)cA=51;
+               if(cB<0)cB=0; else if(cB>51)cB=51;
+               ca=rh264_alpha[cA]; cbe=rh264_beta[cB];
+               for (seg = 0; seg < 4; seg++)
+               {
+                  int ct;
+                  if (!hbS[seg]) continue;
+                  ct = rh264_tc0[hbS[seg]==4?2:hbS[seg]-1][cA];
+                  rh264_filter_luma_edge_n(
+                        pl + (size_t)y*f->cstride + mbx*16 + seg*4,
+                        f->cstride, 1, 4, hbS[seg], ca, cbe, ct);
+               }
+            }
+         }
          /* chroma edge in one pass, lanes along x carrying each luma
           * segment's strength and tc */
-         if (((edge&1)==0 || f->cmbh==16)
+         else if (((edge&1)==0 || f->cmbh==16)
                && (hbS[0]|hbS[1]|hbS[2]|hbS[3]))
          {
             int cy = mby*f->cmbh
@@ -6344,6 +6765,7 @@ typedef struct {
    /* 4:2:2 chroma: the DC block holds eight coefficients and its
     * significance map counts them in pairs (NumC8x8 = 2, 9.3.3.1.3) */
    int      c422;
+   int      c444;   /* 4:4:4: the 8x8 coded_block_flag is coded (cat 5/9/13) */
    /* Per-macroblock residual scratch.  These were block-scope locals
     * in the slice and macroblock decoders (the chroma set alone is
     * 1.3 KiB), stacking on frames that already sit three deep on the
@@ -6503,9 +6925,10 @@ static int rh264_frame_alloc(rh264_frame *f, const rh264_sps *sps,
    f->w = sps->frame_width;  f->h = sps->frame_height;
    f->cropx = sps->crop_x;   f->cropy = sps->crop_y;
    f->mbw = mbw;             f->mbh = mbh;
-   f->ystride = mbw * 16;    f->cstride = mbw * 8;
+   f->c444    = (sps->chroma_format_idc == 3);
+   f->ystride = mbw * 16;    f->cstride = f->c444 ? mbw * 16 : mbw * 8;
    f->mbh_frame = mbh; f->field = 0;
-   f->cmbh = (sps->chroma_format_idc == 2) ? 16 : 8;
+   f->cmbh = (sps->chroma_format_idc >= 2) ? 16 : 8;
    f->ysb = f->ystride; f->csb = f->cstride;
 
    ylen      = (size_t)f->ysb * mbh * 16;
@@ -6518,9 +6941,11 @@ static int rh264_frame_alloc(rh264_frame *f, const rh264_sps *sps,
    mbs       = (size_t)mbw * mbh;
    mvlen     = with_mv ? grid * sizeof(rh264_mv) : 0;
    o_nzl     = RH264_ARENA_NEXT(0,         grid);
+   /* the chroma coefficient-count grids are luma shaped in 4:4:4 and
+    * never larger than that in 4:2:x */
    o_nzc0    = RH264_ARENA_NEXT(o_nzl,     grid);
-   o_nzc1    = RH264_ARENA_NEXT(o_nzc0,    (size_t)mbw*2 * mbh*(f->cmbh/4));
-   o_mbqp    = RH264_ARENA_NEXT(o_nzc1,    (size_t)mbw*2 * mbh*(f->cmbh/4));
+   o_nzc1    = RH264_ARENA_NEXT(o_nzc0,    grid);
+   o_mbqp    = RH264_ARENA_NEXT(o_nzc1,    grid);
    o_mbt8    = RH264_ARENA_NEXT(o_mbqp,    mbs);
    o_mbslice = RH264_ARENA_NEXT(o_mbt8,    mbs);
    o_mvg     = RH264_ARENA_NEXT(o_mbslice, mbs);
@@ -6719,7 +7144,8 @@ static void rh264_video_take_ps(rh264_video *v, const uint8_t *nal, size_t len)
    rbsp = rh264_unescape(nal + 1, len - 1, &rl);
    if (!rbsp) return;
    if (type == 7) { if (rh264_parse_sps(rbsp, rl, &v->sps)) v->have_sps = 1; }
-   else if (type == 8) { if (rh264_parse_pps(rbsp, rl, &v->pps)) v->have_pps = 1; }
+   else if (type == 8) { if (rh264_parse_pps(rbsp, rl, &v->pps,
+         v->have_sps && v->sps.chroma_format_idc == 3)) v->have_pps = 1; }
    free(rbsp);
 }
 
@@ -6798,71 +7224,483 @@ static const uint8_t rh264_transIdxMPS[64]={
  49,50,51,52,53,54,55,56,57,58,59,60,61,62,62,63};
 
 /* ---- rh264_cabac_init.h ---- */
-/* rh264 CABAC I-slice context init table (m,n), spec Tables 9-12..9-24,
-   extracted from libopenh264 g_kiCabacGlobalContextIdx variant 0. */
-#define RH264_CABAC_NCTX 460
-static const int8_t rh264_cabac_init_I[460][2]={
-  {20,-15},{2,54},{3,74},{20,-15},{2,54},{3,74},{-28,127},{-23,104},
-  {-6,53},{-1,54},{7,51},{0,0},{0,0},{0,0},{0,0},{0,0},
-  {0,0},{0,0},{0,0},{0,0},{0,0},{0,0},{0,0},{0,0},
-  {0,0},{0,0},{0,0},{0,0},{0,0},{0,0},{0,0},{0,0},
-  {0,0},{0,0},{0,0},{0,0},{0,0},{0,0},{0,0},{0,0},
-  {0,0},{0,0},{0,0},{0,0},{0,0},{0,0},{0,0},{0,0},
-  {0,0},{0,0},{0,0},{0,0},{0,0},{0,0},{0,0},{0,0},
-  {0,0},{0,0},{0,0},{0,0},{0,41},{0,63},{0,63},{0,63},
-  {-9,83},{4,86},{0,97},{-7,72},{13,41},{3,62},{0,11},{1,55},
-  {0,69},{-17,127},{-13,102},{0,82},{-7,74},{-21,107},{-27,127},{-31,127},
-  {-24,127},{-18,95},{-27,127},{-21,114},{-30,127},{-17,123},{-12,115},{-16,122},
-  {-11,115},{-12,63},{-2,68},{-15,84},{-13,104},{-3,70},{-8,93},{-10,90},
-  {-30,127},{-1,74},{-6,97},{-7,91},{-20,127},{-4,56},{-5,82},{-7,76},
-  {-22,125},{-7,93},{-11,87},{-3,77},{-5,71},{-4,63},{-4,68},{-12,84},
-  {-7,62},{-7,65},{8,61},{5,56},{-2,66},{1,64},{0,61},{-2,78},
-  {1,50},{7,52},{10,35},{0,44},{11,38},{1,45},{0,46},{5,44},
-  {31,17},{1,51},{7,50},{28,19},{16,33},{14,62},{-13,108},{-15,100},
+/* rh264 CABAC context init tables (m,n), spec Tables 9-12..9-33.
+   Contexts 0..459 were extracted from libopenh264 g_kiCabacGlobalContextIdx
+   (variants 0..3); 460..1023 - the 4:4:4 coded_block_flag / significance /
+   level contexts of ctxBlockCat 5..13 (7.4.2.1.1 ChromaArrayType 3) - were
+   extracted from libavcodec cabac_context_init_I / _PB, whose entries 0..459
+   agree with the libopenh264 ones in every position (checked, both slice
+   kinds and all three cabac_init_idc). */
+#define RH264_CABAC_NCTX 1024
+static const int8_t rh264_cabac_init_I[1024][2]={
+  {20,-15},{2,54},{3,74},{20,-15},{2,54},{3,74},{-28,127},{-23,104},{-6,53},
+  {-1,54},{7,51},{0,0},{0,0},{0,0},{0,0},{0,0},{0,0},{0,0},{0,0},{0,0},{0,0},
+  {0,0},{0,0},{0,0},{0,0},{0,0},{0,0},{0,0},{0,0},{0,0},{0,0},{0,0},{0,0},
+  {0,0},{0,0},{0,0},{0,0},{0,0},{0,0},{0,0},{0,0},{0,0},{0,0},{0,0},{0,0},
+  {0,0},{0,0},{0,0},{0,0},{0,0},{0,0},{0,0},{0,0},{0,0},{0,0},{0,0},{0,0},
+  {0,0},{0,0},{0,0},{0,41},{0,63},{0,63},{0,63},{-9,83},{4,86},{0,97},{-7,72},
+  {13,41},{3,62},{0,11},{1,55},{0,69},{-17,127},{-13,102},{0,82},{-7,74},
+  {-21,107},{-27,127},{-31,127},{-24,127},{-18,95},{-27,127},{-21,114},
+  {-30,127},{-17,123},{-12,115},{-16,122},{-11,115},{-12,63},{-2,68},{-15,84},
+  {-13,104},{-3,70},{-8,93},{-10,90},{-30,127},{-1,74},{-6,97},{-7,91},
+  {-20,127},{-4,56},{-5,82},{-7,76},{-22,125},{-7,93},{-11,87},{-3,77},
+  {-5,71},{-4,63},{-4,68},{-12,84},{-7,62},{-7,65},{8,61},{5,56},{-2,66},
+  {1,64},{0,61},{-2,78},{1,50},{7,52},{10,35},{0,44},{11,38},{1,45},{0,46},
+  {5,44},{31,17},{1,51},{7,50},{28,19},{16,33},{14,62},{-13,108},{-15,100},
   {-13,101},{-13,91},{-12,94},{-10,88},{-16,84},{-10,86},{-7,83},{-13,87},
-  {-19,94},{1,70},{0,72},{-5,74},{18,59},{-8,102},{-15,100},{0,95},
-  {-4,75},{2,72},{-11,75},{-3,71},{15,46},{-13,69},{0,62},{0,65},
-  {21,37},{-15,72},{9,57},{16,54},{0,62},{12,72},{24,0},{15,9},
-  {8,25},{13,18},{15,9},{13,19},{10,37},{12,18},{6,29},{20,33},
-  {15,30},{4,45},{1,58},{0,62},{7,61},{12,38},{11,45},{15,39},
-  {11,42},{13,44},{16,45},{12,41},{10,49},{30,34},{18,42},{10,55},
-  {17,51},{17,46},{0,89},{26,-19},{22,-17},{26,-17},{30,-25},{28,-20},
+  {-19,94},{1,70},{0,72},{-5,74},{18,59},{-8,102},{-15,100},{0,95},{-4,75},
+  {2,72},{-11,75},{-3,71},{15,46},{-13,69},{0,62},{0,65},{21,37},{-15,72},
+  {9,57},{16,54},{0,62},{12,72},{24,0},{15,9},{8,25},{13,18},{15,9},{13,19},
+  {10,37},{12,18},{6,29},{20,33},{15,30},{4,45},{1,58},{0,62},{7,61},{12,38},
+  {11,45},{15,39},{11,42},{13,44},{16,45},{12,41},{10,49},{30,34},{18,42},
+  {10,55},{17,51},{17,46},{0,89},{26,-19},{22,-17},{26,-17},{30,-25},{28,-20},
   {33,-23},{37,-27},{33,-23},{40,-28},{38,-17},{33,-11},{40,-15},{41,-6},
-  {38,1},{41,17},{30,-6},{27,3},{26,22},{37,-16},{35,-4},{38,-8},
-  {38,-3},{37,3},{38,5},{42,0},{35,16},{39,22},{14,48},{27,37},
-  {21,60},{12,68},{2,97},{-3,71},{-6,42},{-5,50},{-3,54},{-2,62},
-  {0,58},{1,63},{-2,72},{-1,74},{-9,91},{-5,67},{-5,27},{-3,39},
-  {-2,44},{0,46},{-16,64},{-8,68},{-10,78},{-6,77},{-10,86},{-12,92},
-  {-15,55},{-10,60},{-6,62},{-4,65},{-12,73},{-8,76},{-7,80},{-9,88},
-  {-17,110},{-11,97},{-20,84},{-11,79},{-6,73},{-4,74},{-13,86},{-13,96},
-  {-11,97},{-19,117},{-8,78},{-5,33},{-4,48},{-2,53},{-3,62},{-13,71},
-  {-10,79},{-12,86},{-13,90},{-14,97},{0,0},{-6,93},{-6,84},{-8,79},
-  {0,66},{-1,71},{0,62},{-2,60},{-2,59},{-5,75},{-3,62},{-4,58},
-  {-9,66},{-1,79},{0,71},{3,68},{10,44},{-7,62},{15,36},{14,40},
-  {16,27},{12,29},{1,44},{20,36},{18,32},{5,42},{1,48},{10,62},
-  {17,46},{9,64},{-12,104},{-11,97},{-16,96},{-7,88},{-8,85},{-7,85},
-  {-9,85},{-13,88},{4,66},{-3,77},{-3,76},{-6,76},{10,58},{-1,76},
-  {-1,83},{-7,99},{-14,95},{2,95},{0,76},{-5,74},{0,70},{-11,75},
-  {1,68},{0,65},{-14,73},{3,62},{4,62},{-1,68},{-13,75},{11,55},
-  {5,64},{12,70},{15,6},{6,19},{7,16},{12,14},{18,13},{13,11},
-  {13,15},{15,16},{12,23},{13,23},{15,20},{14,26},{14,44},{17,40},
-  {17,47},{24,17},{21,21},{25,22},{31,27},{22,29},{19,35},{14,50},
-  {10,57},{7,63},{-2,77},{-4,82},{-3,94},{9,69},{-12,109},{36,-35},
-  {36,-34},{32,-26},{37,-30},{44,-32},{34,-18},{34,-15},{40,-15},{33,-7},
-  {35,-5},{33,0},{38,2},{33,13},{23,35},{13,58},{29,-3},{26,0},
-  {22,30},{31,-7},{35,-15},{34,-3},{34,3},{36,-1},{34,5},{32,11},
-  {35,5},{34,12},{39,11},{30,29},{34,26},{29,39},{19,66},{31,21},
-  {31,31},{25,50},{-17,120},{-20,112},{-18,114},{-11,85},{-15,92},{-14,89},
-  {-26,71},{-15,81},{-14,80},{0,68},{-14,70},{-24,56},{-23,68},{-24,50},
-  {-11,74},{23,-13},{26,-13},{40,-15},{49,-14},{44,3},{45,6},{44,34},
-  {33,54},{19,82},{-3,75},{-1,23},{1,34},{1,43},{0,54},{-2,55},
-  {0,61},{1,64},{0,68},{-9,92},{-14,106},{-13,97},{-15,90},{-12,90},
+  {38,1},{41,17},{30,-6},{27,3},{26,22},{37,-16},{35,-4},{38,-8},{38,-3},
+  {37,3},{38,5},{42,0},{35,16},{39,22},{14,48},{27,37},{21,60},{12,68},{2,97},
+  {-3,71},{-6,42},{-5,50},{-3,54},{-2,62},{0,58},{1,63},{-2,72},{-1,74},
+  {-9,91},{-5,67},{-5,27},{-3,39},{-2,44},{0,46},{-16,64},{-8,68},{-10,78},
+  {-6,77},{-10,86},{-12,92},{-15,55},{-10,60},{-6,62},{-4,65},{-12,73},
+  {-8,76},{-7,80},{-9,88},{-17,110},{-11,97},{-20,84},{-11,79},{-6,73},
+  {-4,74},{-13,86},{-13,96},{-11,97},{-19,117},{-8,78},{-5,33},{-4,48},
+  {-2,53},{-3,62},{-13,71},{-10,79},{-12,86},{-13,90},{-14,97},{0,0},{-6,93},
+  {-6,84},{-8,79},{0,66},{-1,71},{0,62},{-2,60},{-2,59},{-5,75},{-3,62},
+  {-4,58},{-9,66},{-1,79},{0,71},{3,68},{10,44},{-7,62},{15,36},{14,40},
+  {16,27},{12,29},{1,44},{20,36},{18,32},{5,42},{1,48},{10,62},{17,46},{9,64},
+  {-12,104},{-11,97},{-16,96},{-7,88},{-8,85},{-7,85},{-9,85},{-13,88},{4,66},
+  {-3,77},{-3,76},{-6,76},{10,58},{-1,76},{-1,83},{-7,99},{-14,95},{2,95},
+  {0,76},{-5,74},{0,70},{-11,75},{1,68},{0,65},{-14,73},{3,62},{4,62},{-1,68},
+  {-13,75},{11,55},{5,64},{12,70},{15,6},{6,19},{7,16},{12,14},{18,13},
+  {13,11},{13,15},{15,16},{12,23},{13,23},{15,20},{14,26},{14,44},{17,40},
+  {17,47},{24,17},{21,21},{25,22},{31,27},{22,29},{19,35},{14,50},{10,57},
+  {7,63},{-2,77},{-4,82},{-3,94},{9,69},{-12,109},{36,-35},{36,-34},{32,-26},
+  {37,-30},{44,-32},{34,-18},{34,-15},{40,-15},{33,-7},{35,-5},{33,0},{38,2},
+  {33,13},{23,35},{13,58},{29,-3},{26,0},{22,30},{31,-7},{35,-15},{34,-3},
+  {34,3},{36,-1},{34,5},{32,11},{35,5},{34,12},{39,11},{30,29},{34,26},
+  {29,39},{19,66},{31,21},{31,31},{25,50},{-17,120},{-20,112},{-18,114},
+  {-11,85},{-15,92},{-14,89},{-26,71},{-15,81},{-14,80},{0,68},{-14,70},
+  {-24,56},{-23,68},{-24,50},{-11,74},{23,-13},{26,-13},{40,-15},{49,-14},
+  {44,3},{45,6},{44,34},{33,54},{19,82},{-3,75},{-1,23},{1,34},{1,43},{0,54},
+  {-2,55},{0,61},{1,64},{0,68},{-9,92},{-14,106},{-13,97},{-15,90},{-12,90},
   {-18,88},{-10,73},{-9,79},{-14,86},{-10,73},{-10,70},{-10,69},{-5,66},
-  {-9,64},{-5,58},{2,59},{21,-10},{24,-11},{28,-8},{28,-1},{29,3},
-  {29,9},{35,20},{29,36},{14,67}
-};
+  {-9,64},{-5,58},{2,59},{21,-10},{24,-11},{28,-8},{28,-1},{29,3},{29,9},
+  {35,20},{29,36},{14,67},{-17,123},{-12,115},{-16,122},{-11,115},{-12,63},
+  {-2,68},{-15,84},{-13,104},{-3,70},{-8,93},{-10,90},{-30,127},{-17,123},
+  {-12,115},{-16,122},{-11,115},{-12,63},{-2,68},{-15,84},{-13,104},{-3,70},
+  {-8,93},{-10,90},{-30,127},{-7,93},{-11,87},{-3,77},{-5,71},{-4,63},{-4,68},
+  {-12,84},{-7,62},{-7,65},{8,61},{5,56},{-2,66},{1,64},{0,61},{-2,78},{1,50},
+  {7,52},{10,35},{0,44},{11,38},{1,45},{0,46},{5,44},{31,17},{1,51},{7,50},
+  {28,19},{16,33},{14,62},{-13,108},{-15,100},{-13,101},{-13,91},{-12,94},
+  {-10,88},{-16,84},{-10,86},{-7,83},{-13,87},{-19,94},{1,70},{0,72},{-5,74},
+  {18,59},{-7,93},{-11,87},{-3,77},{-5,71},{-4,63},{-4,68},{-12,84},{-7,62},
+  {-7,65},{8,61},{5,56},{-2,66},{1,64},{0,61},{-2,78},{1,50},{7,52},{10,35},
+  {0,44},{11,38},{1,45},{0,46},{5,44},{31,17},{1,51},{7,50},{28,19},{16,33},
+  {14,62},{-13,108},{-15,100},{-13,101},{-13,91},{-12,94},{-10,88},{-16,84},
+  {-10,86},{-7,83},{-13,87},{-19,94},{1,70},{0,72},{-5,74},{18,59},{24,0},
+  {15,9},{8,25},{13,18},{15,9},{13,19},{10,37},{12,18},{6,29},{20,33},{15,30},
+  {4,45},{1,58},{0,62},{7,61},{12,38},{11,45},{15,39},{11,42},{13,44},{16,45},
+  {12,41},{10,49},{30,34},{18,42},{10,55},{17,51},{17,46},{0,89},{26,-19},
+  {22,-17},{26,-17},{30,-25},{28,-20},{33,-23},{37,-27},{33,-23},{40,-28},
+  {38,-17},{33,-11},{40,-15},{41,-6},{38,1},{41,17},{24,0},{15,9},{8,25},
+  {13,18},{15,9},{13,19},{10,37},{12,18},{6,29},{20,33},{15,30},{4,45},{1,58},
+  {0,62},{7,61},{12,38},{11,45},{15,39},{11,42},{13,44},{16,45},{12,41},
+  {10,49},{30,34},{18,42},{10,55},{17,51},{17,46},{0,89},{26,-19},{22,-17},
+  {26,-17},{30,-25},{28,-20},{33,-23},{37,-27},{33,-23},{40,-28},{38,-17},
+  {33,-11},{40,-15},{41,-6},{38,1},{41,17},{-17,120},{-20,112},{-18,114},
+  {-11,85},{-15,92},{-14,89},{-26,71},{-15,81},{-14,80},{0,68},{-14,70},
+  {-24,56},{-23,68},{-24,50},{-11,74},{-14,106},{-13,97},{-15,90},{-12,90},
+  {-18,88},{-10,73},{-9,79},{-14,86},{-10,73},{-10,70},{-10,69},{-5,66},
+  {-9,64},{-5,58},{2,59},{23,-13},{26,-13},{40,-15},{49,-14},{44,3},{45,6},
+  {44,34},{33,54},{19,82},{21,-10},{24,-11},{28,-8},{28,-1},{29,3},{29,9},
+  {35,20},{29,36},{14,67},{-3,75},{-1,23},{1,34},{1,43},{0,54},{-2,55},{0,61},
+  {1,64},{0,68},{-9,92},{-17,120},{-20,112},{-18,114},{-11,85},{-15,92},
+  {-14,89},{-26,71},{-15,81},{-14,80},{0,68},{-14,70},{-24,56},{-23,68},
+  {-24,50},{-11,74},{-14,106},{-13,97},{-15,90},{-12,90},{-18,88},{-10,73},
+  {-9,79},{-14,86},{-10,73},{-10,70},{-10,69},{-5,66},{-9,64},{-5,58},{2,59},
+  {23,-13},{26,-13},{40,-15},{49,-14},{44,3},{45,6},{44,34},{33,54},{19,82},
+  {21,-10},{24,-11},{28,-8},{28,-1},{29,3},{29,9},{35,20},{29,36},{14,67},
+  {-3,75},{-1,23},{1,34},{1,43},{0,54},{-2,55},{0,61},{1,64},{0,68},{-9,92},
+  {-6,93},{-6,84},{-8,79},{0,66},{-1,71},{0,62},{-2,60},{-2,59},{-5,75},
+  {-3,62},{-4,58},{-9,66},{-1,79},{0,71},{3,68},{10,44},{-7,62},{15,36},
+  {14,40},{16,27},{12,29},{1,44},{20,36},{18,32},{5,42},{1,48},{10,62},
+  {17,46},{9,64},{-12,104},{-11,97},{-16,96},{-7,88},{-8,85},{-7,85},{-9,85},
+  {-13,88},{4,66},{-3,77},{-3,76},{-6,76},{10,58},{-1,76},{-1,83},{-6,93},
+  {-6,84},{-8,79},{0,66},{-1,71},{0,62},{-2,60},{-2,59},{-5,75},{-3,62},
+  {-4,58},{-9,66},{-1,79},{0,71},{3,68},{10,44},{-7,62},{15,36},{14,40},
+  {16,27},{12,29},{1,44},{20,36},{18,32},{5,42},{1,48},{10,62},{17,46},{9,64},
+  {-12,104},{-11,97},{-16,96},{-7,88},{-8,85},{-7,85},{-9,85},{-13,88},{4,66},
+  {-3,77},{-3,76},{-6,76},{10,58},{-1,76},{-1,83},{15,6},{6,19},{7,16},
+  {12,14},{18,13},{13,11},{13,15},{15,16},{12,23},{13,23},{15,20},{14,26},
+  {14,44},{17,40},{17,47},{24,17},{21,21},{25,22},{31,27},{22,29},{19,35},
+  {14,50},{10,57},{7,63},{-2,77},{-4,82},{-3,94},{9,69},{-12,109},{36,-35},
+  {36,-34},{32,-26},{37,-30},{44,-32},{34,-18},{34,-15},{40,-15},{33,-7},
+  {35,-5},{33,0},{38,2},{33,13},{23,35},{13,58},{15,6},{6,19},{7,16},{12,14},
+  {18,13},{13,11},{13,15},{15,16},{12,23},{13,23},{15,20},{14,26},{14,44},
+  {17,40},{17,47},{24,17},{21,21},{25,22},{31,27},{22,29},{19,35},{14,50},
+  {10,57},{7,63},{-2,77},{-4,82},{-3,94},{9,69},{-12,109},{36,-35},{36,-34},
+  {32,-26},{37,-30},{44,-32},{34,-18},{34,-15},{40,-15},{33,-7},{35,-5},
+  {33,0},{38,2},{33,13},{23,35},{13,58},{-3,71},{-6,42},{-5,50},{-3,54},
+  {-2,62},{0,58},{1,63},{-2,72},{-1,74},{-9,91},{-5,67},{-5,27},{-3,39},
+  {-2,44},{0,46},{-16,64},{-8,68},{-10,78},{-6,77},{-10,86},{-12,92},{-15,55},
+  {-10,60},{-6,62},{-4,65},{-12,73},{-8,76},{-7,80},{-9,88},{-17,110},{-3,71},
+  {-6,42},{-5,50},{-3,54},{-2,62},{0,58},{1,63},{-2,72},{-1,74},{-9,91},
+  {-5,67},{-5,27},{-3,39},{-2,44},{0,46},{-16,64},{-8,68},{-10,78},{-6,77},
+  {-10,86},{-12,92},{-15,55},{-10,60},{-6,62},{-4,65},{-12,73},{-8,76},
+  {-7,80},{-9,88},{-17,110},{-3,70},{-8,93},{-10,90},{-30,127},{-3,70},
+  {-8,93},{-10,90},{-30,127},{-3,70},{-8,93},{-10,90},{-30,127}};
+static const int8_t rh264_cabac_init_PB[3][1024][2]={
+{
+  {20,-15},{2,54},{3,74},{20,-15},{2,54},{3,74},{-28,127},{-23,104},{-6,53},
+  {-1,54},{7,51},{23,33},{23,2},{21,0},{1,9},{0,49},{-37,118},{5,57},{-13,78},
+  {-11,65},{1,62},{12,49},{-4,73},{17,50},{18,64},{9,43},{29,0},{26,67},
+  {16,90},{9,104},{-46,127},{-20,104},{1,67},{-13,78},{-11,65},{1,62},{-6,86},
+  {-17,95},{-6,61},{9,45},{-3,69},{-6,81},{-11,96},{6,55},{7,67},{-5,86},
+  {2,88},{0,58},{-3,76},{-10,94},{5,54},{4,69},{-3,81},{0,88},{-7,67},{-5,74},
+  {-4,74},{-5,80},{-7,72},{1,58},{0,41},{0,63},{0,63},{0,63},{-9,83},{4,86},
+  {0,97},{-7,72},{13,41},{3,62},{0,45},{-4,78},{-3,96},{-27,126},{-28,98},
+  {-25,101},{-23,67},{-28,82},{-20,94},{-16,83},{-22,110},{-21,91},{-18,102},
+  {-13,93},{-29,127},{-7,92},{-5,89},{-7,96},{-13,108},{-3,46},{-1,65},
+  {-1,57},{-9,93},{-3,74},{-9,92},{-8,87},{-23,126},{5,54},{6,60},{6,59},
+  {6,69},{-1,48},{0,68},{-4,69},{-8,88},{-2,85},{-6,78},{-1,75},{-7,77},
+  {2,54},{5,50},{-3,68},{1,50},{6,42},{-4,81},{1,63},{-4,70},{0,67},{2,57},
+  {-2,76},{11,35},{4,64},{1,61},{11,35},{18,25},{12,24},{13,29},{13,36},
+  {-10,93},{-7,73},{-2,73},{13,46},{9,49},{-7,100},{9,53},{2,53},{5,53},
+  {-2,61},{0,56},{0,56},{-13,63},{-5,60},{-1,62},{4,57},{-6,69},{4,57},
+  {14,39},{4,51},{13,68},{3,64},{1,61},{9,63},{7,50},{16,39},{5,44},{4,52},
+  {11,48},{-5,60},{-1,59},{0,59},{22,33},{5,44},{14,43},{-1,78},{0,60},{9,69},
+  {11,28},{2,40},{3,44},{0,49},{0,46},{2,44},{2,51},{0,47},{4,39},{2,62},
+  {6,46},{0,54},{3,54},{2,58},{4,63},{6,51},{6,57},{7,53},{6,52},{6,55},
+  {11,45},{14,36},{8,53},{-1,82},{7,55},{-3,78},{15,46},{22,31},{-1,84},
+  {25,7},{30,-7},{28,3},{28,4},{32,0},{34,-1},{30,6},{30,6},{32,9},{31,19},
+  {26,27},{26,30},{37,20},{28,34},{17,70},{1,67},{5,59},{9,67},{16,30},
+  {18,32},{18,35},{22,29},{24,31},{23,38},{18,43},{20,41},{11,63},{9,59},
+  {9,64},{-1,94},{-2,89},{-9,108},{-6,76},{-2,44},{0,45},{0,52},{-3,64},
+  {-2,59},{-4,70},{-4,75},{-8,82},{-17,102},{-9,77},{3,24},{0,42},{0,48},
+  {0,55},{-6,59},{-7,71},{-12,83},{-11,87},{-30,119},{1,58},{-3,29},{-1,36},
+  {1,38},{2,43},{-6,55},{0,58},{0,64},{-3,74},{-10,90},{0,70},{-4,29},{5,31},
+  {7,42},{1,59},{-2,58},{-3,72},{-3,81},{-11,97},{0,58},{8,5},{10,14},{14,18},
+  {13,27},{2,40},{0,58},{-3,70},{-6,79},{-8,85},{0,0},{-13,106},{-16,106},
+  {-10,87},{-21,114},{-18,110},{-14,98},{-22,110},{-21,106},{-18,103},
+  {-21,107},{-23,108},{-26,112},{-10,96},{-12,95},{-5,91},{-9,93},{-22,94},
+  {-5,86},{9,67},{-4,80},{-10,85},{-1,70},{7,60},{9,58},{5,61},{12,50},
+  {15,50},{18,49},{17,54},{10,41},{7,46},{-1,51},{7,49},{8,52},{9,41},{6,47},
+  {2,55},{13,41},{10,44},{6,50},{5,53},{13,49},{4,63},{6,64},{-2,69},{-2,59},
+  {6,70},{10,44},{9,31},{12,43},{3,53},{14,34},{10,38},{-3,52},{13,40},
+  {17,32},{7,44},{7,38},{13,50},{10,57},{26,43},{14,11},{11,14},{9,11},
+  {18,11},{21,9},{23,-2},{32,-15},{32,-15},{34,-21},{39,-23},{42,-33},
+  {41,-31},{46,-28},{38,-12},{21,29},{45,-24},{53,-45},{48,-26},{65,-43},
+  {43,-19},{39,-10},{30,9},{18,26},{20,27},{0,57},{-14,82},{-5,75},{-19,97},
+  {-35,125},{27,0},{28,0},{31,-4},{27,6},{34,8},{30,10},{24,22},{33,19},
+  {22,32},{26,31},{21,41},{26,44},{23,47},{16,65},{14,71},{8,60},{6,63},
+  {17,65},{21,24},{23,20},{26,23},{27,32},{28,23},{28,24},{23,40},{24,32},
+  {28,29},{23,42},{19,57},{22,53},{22,61},{11,86},{12,40},{11,51},{14,59},
+  {-4,79},{-7,71},{-5,69},{-9,70},{-8,66},{-10,68},{-19,73},{-12,69},{-16,70},
+  {-15,67},{-20,62},{-19,70},{-16,66},{-22,65},{-20,63},{9,-2},{26,-9},
+  {33,-9},{39,-7},{41,-2},{45,3},{49,9},{45,27},{36,59},{-6,66},{-7,35},
+  {-7,42},{-8,45},{-5,48},{-12,56},{-6,60},{-5,62},{-8,66},{-8,76},{-5,85},
+  {-6,81},{-10,77},{-7,81},{-17,80},{-18,73},{-4,74},{-10,83},{-9,71},{-9,67},
+  {-1,61},{-8,66},{-14,66},{0,59},{2,59},{21,-13},{33,-14},{39,-7},{46,-2},
+  {51,2},{60,6},{61,17},{55,34},{42,62},{-7,92},{-5,89},{-7,96},{-13,108},
+  {-3,46},{-1,65},{-1,57},{-9,93},{-3,74},{-9,92},{-8,87},{-23,126},{-7,92},
+  {-5,89},{-7,96},{-13,108},{-3,46},{-1,65},{-1,57},{-9,93},{-3,74},{-9,92},
+  {-8,87},{-23,126},{-2,85},{-6,78},{-1,75},{-7,77},{2,54},{5,50},{-3,68},
+  {1,50},{6,42},{-4,81},{1,63},{-4,70},{0,67},{2,57},{-2,76},{11,35},{4,64},
+  {1,61},{11,35},{18,25},{12,24},{13,29},{13,36},{-10,93},{-7,73},{-2,73},
+  {13,46},{9,49},{-7,100},{9,53},{2,53},{5,53},{-2,61},{0,56},{0,56},{-13,63},
+  {-5,60},{-1,62},{4,57},{-6,69},{4,57},{14,39},{4,51},{13,68},{-2,85},
+  {-6,78},{-1,75},{-7,77},{2,54},{5,50},{-3,68},{1,50},{6,42},{-4,81},{1,63},
+  {-4,70},{0,67},{2,57},{-2,76},{11,35},{4,64},{1,61},{11,35},{18,25},{12,24},
+  {13,29},{13,36},{-10,93},{-7,73},{-2,73},{13,46},{9,49},{-7,100},{9,53},
+  {2,53},{5,53},{-2,61},{0,56},{0,56},{-13,63},{-5,60},{-1,62},{4,57},{-6,69},
+  {4,57},{14,39},{4,51},{13,68},{11,28},{2,40},{3,44},{0,49},{0,46},{2,44},
+  {2,51},{0,47},{4,39},{2,62},{6,46},{0,54},{3,54},{2,58},{4,63},{6,51},
+  {6,57},{7,53},{6,52},{6,55},{11,45},{14,36},{8,53},{-1,82},{7,55},{-3,78},
+  {15,46},{22,31},{-1,84},{25,7},{30,-7},{28,3},{28,4},{32,0},{34,-1},{30,6},
+  {30,6},{32,9},{31,19},{26,27},{26,30},{37,20},{28,34},{17,70},{11,28},
+  {2,40},{3,44},{0,49},{0,46},{2,44},{2,51},{0,47},{4,39},{2,62},{6,46},
+  {0,54},{3,54},{2,58},{4,63},{6,51},{6,57},{7,53},{6,52},{6,55},{11,45},
+  {14,36},{8,53},{-1,82},{7,55},{-3,78},{15,46},{22,31},{-1,84},{25,7},
+  {30,-7},{28,3},{28,4},{32,0},{34,-1},{30,6},{30,6},{32,9},{31,19},{26,27},
+  {26,30},{37,20},{28,34},{17,70},{-4,79},{-7,71},{-5,69},{-9,70},{-8,66},
+  {-10,68},{-19,73},{-12,69},{-16,70},{-15,67},{-20,62},{-19,70},{-16,66},
+  {-22,65},{-20,63},{-5,85},{-6,81},{-10,77},{-7,81},{-17,80},{-18,73},
+  {-4,74},{-10,83},{-9,71},{-9,67},{-1,61},{-8,66},{-14,66},{0,59},{2,59},
+  {9,-2},{26,-9},{33,-9},{39,-7},{41,-2},{45,3},{49,9},{45,27},{36,59},
+  {21,-13},{33,-14},{39,-7},{46,-2},{51,2},{60,6},{61,17},{55,34},{42,62},
+  {-6,66},{-7,35},{-7,42},{-8,45},{-5,48},{-12,56},{-6,60},{-5,62},{-8,66},
+  {-8,76},{-4,79},{-7,71},{-5,69},{-9,70},{-8,66},{-10,68},{-19,73},{-12,69},
+  {-16,70},{-15,67},{-20,62},{-19,70},{-16,66},{-22,65},{-20,63},{-5,85},
+  {-6,81},{-10,77},{-7,81},{-17,80},{-18,73},{-4,74},{-10,83},{-9,71},{-9,67},
+  {-1,61},{-8,66},{-14,66},{0,59},{2,59},{9,-2},{26,-9},{33,-9},{39,-7},
+  {41,-2},{45,3},{49,9},{45,27},{36,59},{21,-13},{33,-14},{39,-7},{46,-2},
+  {51,2},{60,6},{61,17},{55,34},{42,62},{-6,66},{-7,35},{-7,42},{-8,45},
+  {-5,48},{-12,56},{-6,60},{-5,62},{-8,66},{-8,76},{-13,106},{-16,106},
+  {-10,87},{-21,114},{-18,110},{-14,98},{-22,110},{-21,106},{-18,103},
+  {-21,107},{-23,108},{-26,112},{-10,96},{-12,95},{-5,91},{-9,93},{-22,94},
+  {-5,86},{9,67},{-4,80},{-10,85},{-1,70},{7,60},{9,58},{5,61},{12,50},
+  {15,50},{18,49},{17,54},{10,41},{7,46},{-1,51},{7,49},{8,52},{9,41},{6,47},
+  {2,55},{13,41},{10,44},{6,50},{5,53},{13,49},{4,63},{6,64},{-13,106},
+  {-16,106},{-10,87},{-21,114},{-18,110},{-14,98},{-22,110},{-21,106},
+  {-18,103},{-21,107},{-23,108},{-26,112},{-10,96},{-12,95},{-5,91},{-9,93},
+  {-22,94},{-5,86},{9,67},{-4,80},{-10,85},{-1,70},{7,60},{9,58},{5,61},
+  {12,50},{15,50},{18,49},{17,54},{10,41},{7,46},{-1,51},{7,49},{8,52},{9,41},
+  {6,47},{2,55},{13,41},{10,44},{6,50},{5,53},{13,49},{4,63},{6,64},{14,11},
+  {11,14},{9,11},{18,11},{21,9},{23,-2},{32,-15},{32,-15},{34,-21},{39,-23},
+  {42,-33},{41,-31},{46,-28},{38,-12},{21,29},{45,-24},{53,-45},{48,-26},
+  {65,-43},{43,-19},{39,-10},{30,9},{18,26},{20,27},{0,57},{-14,82},{-5,75},
+  {-19,97},{-35,125},{27,0},{28,0},{31,-4},{27,6},{34,8},{30,10},{24,22},
+  {33,19},{22,32},{26,31},{21,41},{26,44},{23,47},{16,65},{14,71},{14,11},
+  {11,14},{9,11},{18,11},{21,9},{23,-2},{32,-15},{32,-15},{34,-21},{39,-23},
+  {42,-33},{41,-31},{46,-28},{38,-12},{21,29},{45,-24},{53,-45},{48,-26},
+  {65,-43},{43,-19},{39,-10},{30,9},{18,26},{20,27},{0,57},{-14,82},{-5,75},
+  {-19,97},{-35,125},{27,0},{28,0},{31,-4},{27,6},{34,8},{30,10},{24,22},
+  {33,19},{22,32},{26,31},{21,41},{26,44},{23,47},{16,65},{14,71},{-6,76},
+  {-2,44},{0,45},{0,52},{-3,64},{-2,59},{-4,70},{-4,75},{-8,82},{-17,102},
+  {-9,77},{3,24},{0,42},{0,48},{0,55},{-6,59},{-7,71},{-12,83},{-11,87},
+  {-30,119},{1,58},{-3,29},{-1,36},{1,38},{2,43},{-6,55},{0,58},{0,64},
+  {-3,74},{-10,90},{-6,76},{-2,44},{0,45},{0,52},{-3,64},{-2,59},{-4,70},
+  {-4,75},{-8,82},{-17,102},{-9,77},{3,24},{0,42},{0,48},{0,55},{-6,59},
+  {-7,71},{-12,83},{-11,87},{-30,119},{1,58},{-3,29},{-1,36},{1,38},{2,43},
+  {-6,55},{0,58},{0,64},{-3,74},{-10,90},{-3,74},{-9,92},{-8,87},{-23,126},
+  {-3,74},{-9,92},{-8,87},{-23,126},{-3,74},{-9,92},{-8,87},{-23,126}},
+{
+  {20,-15},{2,54},{3,74},{20,-15},{2,54},{3,74},{-28,127},{-23,104},{-6,53},
+  {-1,54},{7,51},{22,25},{34,0},{16,0},{-2,9},{4,41},{-29,118},{2,65},{-6,71},
+  {-13,79},{5,52},{9,50},{-3,70},{10,54},{26,34},{19,22},{40,0},{57,2},
+  {41,36},{26,69},{-45,127},{-15,101},{-4,76},{-6,71},{-13,79},{5,52},{6,69},
+  {-13,90},{0,52},{8,43},{-2,69},{-5,82},{-10,96},{2,59},{2,75},{-3,87},
+  {-3,100},{1,56},{-3,74},{-6,85},{0,59},{-3,81},{-7,86},{-5,95},{-1,66},
+  {-1,77},{1,70},{-2,86},{-5,72},{0,61},{0,41},{0,63},{0,63},{0,63},{-9,83},
+  {4,86},{0,97},{-7,72},{13,41},{3,62},{13,15},{7,51},{2,80},{-39,127},
+  {-18,91},{-17,96},{-26,81},{-35,98},{-24,102},{-23,97},{-27,119},{-24,99},
+  {-21,110},{-18,102},{-36,127},{0,80},{-5,89},{-7,94},{-4,92},{0,39},{0,65},
+  {-15,84},{-35,127},{-2,73},{-12,104},{-9,91},{-31,127},{3,55},{7,56},{7,55},
+  {8,61},{-3,53},{0,68},{-7,74},{-9,88},{-13,103},{-13,91},{-9,89},{-14,92},
+  {-8,76},{-12,87},{-23,110},{-24,105},{-10,78},{-20,112},{-17,99},{-78,127},
+  {-70,127},{-50,127},{-46,127},{-4,66},{-5,78},{-4,71},{-8,72},{2,59},
+  {-1,55},{-7,70},{-6,75},{-8,89},{-34,119},{-3,75},{32,20},{30,22},{-44,127},
+  {0,54},{-5,61},{0,58},{-1,60},{-3,61},{-8,67},{-25,84},{-14,74},{-5,65},
+  {5,52},{2,57},{0,61},{-9,69},{-11,70},{18,55},{-4,71},{0,58},{7,61},{9,41},
+  {18,25},{9,32},{5,43},{9,47},{0,44},{0,51},{2,46},{19,38},{-4,66},{15,38},
+  {12,42},{9,34},{0,89},{4,45},{10,28},{10,31},{33,-11},{52,-43},{18,15},
+  {28,0},{35,-22},{38,-25},{34,0},{39,-18},{32,-12},{102,-94},{0,0},{56,-15},
+  {33,-4},{29,10},{37,-5},{51,-29},{39,-9},{52,-34},{69,-58},{67,-63},{44,-5},
+  {32,7},{55,-29},{32,1},{0,0},{27,36},{33,-25},{34,-30},{36,-28},{38,-28},
+  {38,-27},{34,-18},{35,-16},{34,-14},{32,-8},{37,-6},{35,0},{30,10},{28,18},
+  {26,25},{29,41},{0,75},{2,72},{8,77},{14,35},{18,31},{17,35},{21,30},
+  {17,45},{20,42},{18,45},{27,26},{16,54},{7,66},{16,56},{11,73},{10,67},
+  {-10,116},{-23,112},{-15,71},{-7,61},{0,53},{-5,66},{-11,77},{-9,80},
+  {-9,84},{-10,87},{-34,127},{-21,101},{-3,39},{-5,53},{-7,61},{-11,75},
+  {-15,77},{-17,91},{-25,107},{-25,111},{-28,122},{-11,76},{-10,44},{-10,52},
+  {-10,57},{-9,58},{-16,72},{-7,69},{-4,69},{-5,74},{-9,86},{2,66},{-9,34},
+  {1,32},{11,31},{5,52},{-2,55},{-2,67},{0,73},{-8,89},{3,52},{7,4},{10,8},
+  {17,8},{16,19},{3,37},{-1,61},{-5,73},{-1,70},{-4,78},{0,0},{-21,126},
+  {-23,124},{-20,110},{-26,126},{-25,124},{-17,105},{-27,121},{-27,117},
+  {-17,102},{-26,117},{-27,116},{-33,122},{-10,95},{-14,100},{-8,95},
+  {-17,111},{-28,114},{-6,89},{-2,80},{-4,82},{-9,85},{-8,81},{-1,72},{5,64},
+  {1,67},{9,56},{0,69},{1,69},{7,69},{-7,69},{-6,67},{-16,77},{-2,64},{2,61},
+  {-6,67},{-3,64},{2,57},{-3,65},{-3,66},{0,62},{9,51},{-1,66},{-2,71},
+  {-2,75},{-1,70},{-9,72},{14,60},{16,37},{0,47},{18,35},{11,37},{12,41},
+  {10,41},{2,48},{12,41},{13,41},{0,59},{3,50},{19,40},{3,66},{18,50},{19,-6},
+  {18,-6},{14,0},{26,-12},{31,-16},{33,-25},{33,-22},{37,-28},{39,-30},
+  {42,-30},{47,-42},{45,-36},{49,-34},{41,-17},{32,9},{69,-71},{63,-63},
+  {66,-64},{77,-74},{54,-39},{52,-35},{41,-10},{36,0},{40,-1},{30,14},{28,26},
+  {23,37},{12,55},{11,65},{37,-33},{39,-36},{40,-37},{38,-30},{46,-33},
+  {42,-30},{40,-24},{49,-29},{38,-12},{40,-10},{38,-3},{46,-5},{31,20},
+  {29,30},{25,44},{12,48},{11,49},{26,45},{22,22},{23,22},{27,21},{33,20},
+  {26,28},{30,24},{27,34},{18,42},{25,39},{18,50},{12,70},{21,54},{14,71},
+  {11,83},{25,32},{21,49},{21,54},{-5,85},{-6,81},{-10,77},{-7,81},{-17,80},
+  {-18,73},{-4,74},{-10,83},{-9,71},{-9,67},{-1,61},{-8,66},{-14,66},{0,59},
+  {2,59},{17,-10},{32,-13},{42,-9},{49,-5},{53,0},{64,3},{68,10},{66,27},
+  {47,57},{-5,71},{0,24},{-1,36},{-2,42},{-2,52},{-9,57},{-6,63},{-4,65},
+  {-4,67},{-7,82},{-3,81},{-3,76},{-7,72},{-6,78},{-12,72},{-14,68},{-3,70},
+  {-6,76},{-5,66},{-5,62},{0,57},{-4,61},{-9,60},{1,54},{2,58},{17,-10},
+  {32,-13},{42,-9},{49,-5},{53,0},{64,3},{68,10},{66,27},{47,57},{0,80},
+  {-5,89},{-7,94},{-4,92},{0,39},{0,65},{-15,84},{-35,127},{-2,73},{-12,104},
+  {-9,91},{-31,127},{0,80},{-5,89},{-7,94},{-4,92},{0,39},{0,65},{-15,84},
+  {-35,127},{-2,73},{-12,104},{-9,91},{-31,127},{-13,103},{-13,91},{-9,89},
+  {-14,92},{-8,76},{-12,87},{-23,110},{-24,105},{-10,78},{-20,112},{-17,99},
+  {-78,127},{-70,127},{-50,127},{-46,127},{-4,66},{-5,78},{-4,71},{-8,72},
+  {2,59},{-1,55},{-7,70},{-6,75},{-8,89},{-34,119},{-3,75},{32,20},{30,22},
+  {-44,127},{0,54},{-5,61},{0,58},{-1,60},{-3,61},{-8,67},{-25,84},{-14,74},
+  {-5,65},{5,52},{2,57},{0,61},{-9,69},{-11,70},{18,55},{-13,103},{-13,91},
+  {-9,89},{-14,92},{-8,76},{-12,87},{-23,110},{-24,105},{-10,78},{-20,112},
+  {-17,99},{-78,127},{-70,127},{-50,127},{-46,127},{-4,66},{-5,78},{-4,71},
+  {-8,72},{2,59},{-1,55},{-7,70},{-6,75},{-8,89},{-34,119},{-3,75},{32,20},
+  {30,22},{-44,127},{0,54},{-5,61},{0,58},{-1,60},{-3,61},{-8,67},{-25,84},
+  {-14,74},{-5,65},{5,52},{2,57},{0,61},{-9,69},{-11,70},{18,55},{4,45},
+  {10,28},{10,31},{33,-11},{52,-43},{18,15},{28,0},{35,-22},{38,-25},{34,0},
+  {39,-18},{32,-12},{102,-94},{0,0},{56,-15},{33,-4},{29,10},{37,-5},{51,-29},
+  {39,-9},{52,-34},{69,-58},{67,-63},{44,-5},{32,7},{55,-29},{32,1},{0,0},
+  {27,36},{33,-25},{34,-30},{36,-28},{38,-28},{38,-27},{34,-18},{35,-16},
+  {34,-14},{32,-8},{37,-6},{35,0},{30,10},{28,18},{26,25},{29,41},{4,45},
+  {10,28},{10,31},{33,-11},{52,-43},{18,15},{28,0},{35,-22},{38,-25},{34,0},
+  {39,-18},{32,-12},{102,-94},{0,0},{56,-15},{33,-4},{29,10},{37,-5},{51,-29},
+  {39,-9},{52,-34},{69,-58},{67,-63},{44,-5},{32,7},{55,-29},{32,1},{0,0},
+  {27,36},{33,-25},{34,-30},{36,-28},{38,-28},{38,-27},{34,-18},{35,-16},
+  {34,-14},{32,-8},{37,-6},{35,0},{30,10},{28,18},{26,25},{29,41},{-5,85},
+  {-6,81},{-10,77},{-7,81},{-17,80},{-18,73},{-4,74},{-10,83},{-9,71},{-9,67},
+  {-1,61},{-8,66},{-14,66},{0,59},{2,59},{-3,81},{-3,76},{-7,72},{-6,78},
+  {-12,72},{-14,68},{-3,70},{-6,76},{-5,66},{-5,62},{0,57},{-4,61},{-9,60},
+  {1,54},{2,58},{17,-10},{32,-13},{42,-9},{49,-5},{53,0},{64,3},{68,10},
+  {66,27},{47,57},{17,-10},{32,-13},{42,-9},{49,-5},{53,0},{64,3},{68,10},
+  {66,27},{47,57},{-5,71},{0,24},{-1,36},{-2,42},{-2,52},{-9,57},{-6,63},
+  {-4,65},{-4,67},{-7,82},{-5,85},{-6,81},{-10,77},{-7,81},{-17,80},{-18,73},
+  {-4,74},{-10,83},{-9,71},{-9,67},{-1,61},{-8,66},{-14,66},{0,59},{2,59},
+  {-3,81},{-3,76},{-7,72},{-6,78},{-12,72},{-14,68},{-3,70},{-6,76},{-5,66},
+  {-5,62},{0,57},{-4,61},{-9,60},{1,54},{2,58},{17,-10},{32,-13},{42,-9},
+  {49,-5},{53,0},{64,3},{68,10},{66,27},{47,57},{17,-10},{32,-13},{42,-9},
+  {49,-5},{53,0},{64,3},{68,10},{66,27},{47,57},{-5,71},{0,24},{-1,36},
+  {-2,42},{-2,52},{-9,57},{-6,63},{-4,65},{-4,67},{-7,82},{-21,126},{-23,124},
+  {-20,110},{-26,126},{-25,124},{-17,105},{-27,121},{-27,117},{-17,102},
+  {-26,117},{-27,116},{-33,122},{-10,95},{-14,100},{-8,95},{-17,111},
+  {-28,114},{-6,89},{-2,80},{-4,82},{-9,85},{-8,81},{-1,72},{5,64},{1,67},
+  {9,56},{0,69},{1,69},{7,69},{-7,69},{-6,67},{-16,77},{-2,64},{2,61},{-6,67},
+  {-3,64},{2,57},{-3,65},{-3,66},{0,62},{9,51},{-1,66},{-2,71},{-2,75},
+  {-21,126},{-23,124},{-20,110},{-26,126},{-25,124},{-17,105},{-27,121},
+  {-27,117},{-17,102},{-26,117},{-27,116},{-33,122},{-10,95},{-14,100},
+  {-8,95},{-17,111},{-28,114},{-6,89},{-2,80},{-4,82},{-9,85},{-8,81},{-1,72},
+  {5,64},{1,67},{9,56},{0,69},{1,69},{7,69},{-7,69},{-6,67},{-16,77},{-2,64},
+  {2,61},{-6,67},{-3,64},{2,57},{-3,65},{-3,66},{0,62},{9,51},{-1,66},{-2,71},
+  {-2,75},{19,-6},{18,-6},{14,0},{26,-12},{31,-16},{33,-25},{33,-22},{37,-28},
+  {39,-30},{42,-30},{47,-42},{45,-36},{49,-34},{41,-17},{32,9},{69,-71},
+  {63,-63},{66,-64},{77,-74},{54,-39},{52,-35},{41,-10},{36,0},{40,-1},
+  {30,14},{28,26},{23,37},{12,55},{11,65},{37,-33},{39,-36},{40,-37},{38,-30},
+  {46,-33},{42,-30},{40,-24},{49,-29},{38,-12},{40,-10},{38,-3},{46,-5},
+  {31,20},{29,30},{25,44},{19,-6},{18,-6},{14,0},{26,-12},{31,-16},{33,-25},
+  {33,-22},{37,-28},{39,-30},{42,-30},{47,-42},{45,-36},{49,-34},{41,-17},
+  {32,9},{69,-71},{63,-63},{66,-64},{77,-74},{54,-39},{52,-35},{41,-10},
+  {36,0},{40,-1},{30,14},{28,26},{23,37},{12,55},{11,65},{37,-33},{39,-36},
+  {40,-37},{38,-30},{46,-33},{42,-30},{40,-24},{49,-29},{38,-12},{40,-10},
+  {38,-3},{46,-5},{31,20},{29,30},{25,44},{-23,112},{-15,71},{-7,61},{0,53},
+  {-5,66},{-11,77},{-9,80},{-9,84},{-10,87},{-34,127},{-21,101},{-3,39},
+  {-5,53},{-7,61},{-11,75},{-15,77},{-17,91},{-25,107},{-25,111},{-28,122},
+  {-11,76},{-10,44},{-10,52},{-10,57},{-9,58},{-16,72},{-7,69},{-4,69},
+  {-5,74},{-9,86},{-23,112},{-15,71},{-7,61},{0,53},{-5,66},{-11,77},{-9,80},
+  {-9,84},{-10,87},{-34,127},{-21,101},{-3,39},{-5,53},{-7,61},{-11,75},
+  {-15,77},{-17,91},{-25,107},{-25,111},{-28,122},{-11,76},{-10,44},{-10,52},
+  {-10,57},{-9,58},{-16,72},{-7,69},{-4,69},{-5,74},{-9,86},{-2,73},{-12,104},
+  {-9,91},{-31,127},{-2,73},{-12,104},{-9,91},{-31,127},{-2,73},{-12,104},
+  {-9,91},{-31,127}},
+{
+  {20,-15},{2,54},{3,74},{20,-15},{2,54},{3,74},{-28,127},{-23,104},{-6,53},
+  {-1,54},{7,51},{29,16},{25,0},{14,0},{-10,51},{-3,62},{-27,99},{26,16},
+  {-4,85},{-24,102},{5,57},{6,57},{-17,73},{14,57},{20,40},{20,10},{29,0},
+  {54,0},{37,42},{12,97},{-32,127},{-22,117},{-2,74},{-4,85},{-24,102},{5,57},
+  {-6,93},{-14,88},{-6,44},{4,55},{-11,89},{-15,103},{-21,116},{19,57},
+  {20,58},{4,84},{6,96},{1,63},{-5,85},{-13,106},{5,63},{6,75},{-3,90},
+  {-1,101},{3,55},{-4,79},{-2,75},{-12,97},{-7,50},{1,60},{0,41},{0,63},
+  {0,63},{0,63},{-9,83},{4,86},{0,97},{-7,72},{13,41},{3,62},{7,34},{-9,88},
+  {-20,127},{-36,127},{-17,91},{-14,95},{-25,84},{-25,86},{-12,89},{-17,91},
+  {-31,127},{-14,76},{-18,103},{-13,90},{-37,127},{11,80},{5,76},{2,84},
+  {5,78},{-6,55},{4,61},{-14,83},{-37,127},{-5,79},{-11,104},{-11,91},
+  {-30,127},{0,65},{-2,79},{0,72},{-4,92},{-6,56},{3,68},{-8,71},{-13,98},
+  {-4,86},{-12,88},{-5,82},{-3,72},{-4,67},{-8,72},{-16,89},{-9,69},{-1,59},
+  {5,66},{4,57},{-4,71},{-2,71},{2,58},{-1,74},{-4,44},{-1,69},{0,62},{-7,51},
+  {-4,47},{-6,42},{-3,41},{-6,53},{8,76},{-9,78},{-11,83},{9,52},{0,67},
+  {-5,90},{1,67},{-15,72},{-5,75},{-8,80},{-21,83},{-21,64},{-13,31},{-25,64},
+  {-29,94},{9,75},{17,63},{-8,74},{-5,35},{-2,27},{13,91},{3,65},{-7,69},
+  {8,77},{-10,66},{3,62},{-3,68},{-20,81},{0,30},{1,7},{-3,23},{-21,74},
+  {16,66},{-23,124},{17,37},{44,-18},{50,-34},{-22,127},{4,39},{0,42},{7,34},
+  {11,29},{8,31},{6,37},{7,42},{3,40},{8,33},{13,43},{13,36},{4,47},{3,55},
+  {2,58},{6,60},{8,44},{11,44},{14,42},{7,48},{4,56},{4,52},{13,37},{9,49},
+  {19,58},{10,48},{12,45},{0,69},{20,33},{8,63},{35,-18},{33,-25},{28,-3},
+  {24,10},{27,0},{34,-14},{52,-44},{39,-24},{19,17},{31,25},{36,29},{24,33},
+  {34,15},{30,20},{22,73},{20,34},{19,31},{27,44},{19,16},{15,36},{15,36},
+  {21,28},{25,21},{30,20},{31,12},{27,16},{24,42},{0,93},{14,56},{15,57},
+  {26,38},{-24,127},{-24,115},{-22,82},{-9,62},{0,53},{0,59},{-14,85},
+  {-13,89},{-13,94},{-11,92},{-29,127},{-21,100},{-14,57},{-12,67},{-11,71},
+  {-10,77},{-21,85},{-16,88},{-23,104},{-15,98},{-37,127},{-10,82},{-8,48},
+  {-8,61},{-8,66},{-7,70},{-14,75},{-10,79},{-9,83},{-12,92},{-18,108},
+  {-4,79},{-22,69},{-16,75},{-2,58},{1,58},{-13,78},{-9,83},{-4,81},{-13,99},
+  {-13,81},{-6,38},{-13,62},{-6,58},{-2,59},{-16,73},{-10,76},{-13,86},
+  {-9,83},{-10,87},{0,0},{-22,127},{-25,127},{-25,120},{-27,127},{-19,114},
+  {-23,117},{-25,118},{-26,117},{-24,113},{-28,118},{-31,120},{-37,124},
+  {-10,94},{-15,102},{-10,99},{-13,106},{-50,127},{-5,92},{17,57},{-5,86},
+  {-13,94},{-12,91},{-2,77},{0,71},{-1,73},{4,64},{-7,81},{5,64},{15,57},
+  {1,67},{0,68},{-10,67},{1,68},{0,77},{2,64},{0,68},{-5,78},{7,55},{5,59},
+  {2,65},{14,54},{15,44},{5,60},{2,70},{-2,76},{-18,86},{12,70},{5,64},
+  {-12,70},{11,55},{5,56},{0,69},{2,65},{-6,74},{5,54},{7,54},{-6,76},
+  {-11,82},{-2,77},{-2,77},{25,42},{17,-13},{16,-9},{17,-12},{27,-21},
+  {37,-30},{41,-40},{42,-41},{48,-47},{39,-32},{46,-40},{52,-51},{46,-41},
+  {52,-39},{43,-19},{32,11},{61,-55},{56,-46},{62,-50},{81,-67},{45,-20},
+  {35,-2},{28,15},{34,1},{39,1},{30,17},{20,38},{18,45},{15,54},{0,79},
+  {36,-16},{37,-14},{37,-17},{32,1},{34,15},{29,15},{24,25},{34,22},{31,16},
+  {35,18},{31,28},{33,41},{36,28},{27,47},{21,62},{18,31},{19,26},{36,24},
+  {24,23},{27,16},{24,30},{31,29},{22,41},{22,42},{16,60},{15,52},{14,60},
+  {3,78},{-16,123},{21,53},{22,56},{25,61},{21,33},{19,50},{17,61},{-3,78},
+  {-8,74},{-9,72},{-10,72},{-18,75},{-12,71},{-11,63},{-5,70},{-17,75},
+  {-14,72},{-16,67},{-8,53},{-14,59},{-9,52},{-11,68},{9,-2},{30,-10},{31,-4},
+  {33,-1},{33,7},{31,12},{37,23},{31,38},{20,64},{-9,71},{-7,37},{-8,44},
+  {-11,49},{-10,56},{-12,59},{-8,63},{-9,67},{-6,68},{-10,79},{-3,78},{-8,74},
+  {-9,72},{-10,72},{-18,75},{-12,71},{-11,63},{-5,70},{-17,75},{-14,72},
+  {-16,67},{-8,53},{-14,59},{-9,52},{-11,68},{9,-2},{30,-10},{31,-4},{33,-1},
+  {33,7},{31,12},{37,23},{31,38},{20,64},{11,80},{5,76},{2,84},{5,78},{-6,55},
+  {4,61},{-14,83},{-37,127},{-5,79},{-11,104},{-11,91},{-30,127},{11,80},
+  {5,76},{2,84},{5,78},{-6,55},{4,61},{-14,83},{-37,127},{-5,79},{-11,104},
+  {-11,91},{-30,127},{-4,86},{-12,88},{-5,82},{-3,72},{-4,67},{-8,72},
+  {-16,89},{-9,69},{-1,59},{5,66},{4,57},{-4,71},{-2,71},{2,58},{-1,74},
+  {-4,44},{-1,69},{0,62},{-7,51},{-4,47},{-6,42},{-3,41},{-6,53},{8,76},
+  {-9,78},{-11,83},{9,52},{0,67},{-5,90},{1,67},{-15,72},{-5,75},{-8,80},
+  {-21,83},{-21,64},{-13,31},{-25,64},{-29,94},{9,75},{17,63},{-8,74},{-5,35},
+  {-2,27},{13,91},{-4,86},{-12,88},{-5,82},{-3,72},{-4,67},{-8,72},{-16,89},
+  {-9,69},{-1,59},{5,66},{4,57},{-4,71},{-2,71},{2,58},{-1,74},{-4,44},
+  {-1,69},{0,62},{-7,51},{-4,47},{-6,42},{-3,41},{-6,53},{8,76},{-9,78},
+  {-11,83},{9,52},{0,67},{-5,90},{1,67},{-15,72},{-5,75},{-8,80},{-21,83},
+  {-21,64},{-13,31},{-25,64},{-29,94},{9,75},{17,63},{-8,74},{-5,35},{-2,27},
+  {13,91},{4,39},{0,42},{7,34},{11,29},{8,31},{6,37},{7,42},{3,40},{8,33},
+  {13,43},{13,36},{4,47},{3,55},{2,58},{6,60},{8,44},{11,44},{14,42},{7,48},
+  {4,56},{4,52},{13,37},{9,49},{19,58},{10,48},{12,45},{0,69},{20,33},{8,63},
+  {35,-18},{33,-25},{28,-3},{24,10},{27,0},{34,-14},{52,-44},{39,-24},{19,17},
+  {31,25},{36,29},{24,33},{34,15},{30,20},{22,73},{4,39},{0,42},{7,34},
+  {11,29},{8,31},{6,37},{7,42},{3,40},{8,33},{13,43},{13,36},{4,47},{3,55},
+  {2,58},{6,60},{8,44},{11,44},{14,42},{7,48},{4,56},{4,52},{13,37},{9,49},
+  {19,58},{10,48},{12,45},{0,69},{20,33},{8,63},{35,-18},{33,-25},{28,-3},
+  {24,10},{27,0},{34,-14},{52,-44},{39,-24},{19,17},{31,25},{36,29},{24,33},
+  {34,15},{30,20},{22,73},{-3,78},{-8,74},{-9,72},{-10,72},{-18,75},{-12,71},
+  {-11,63},{-5,70},{-17,75},{-14,72},{-16,67},{-8,53},{-14,59},{-9,52},
+  {-11,68},{-3,78},{-8,74},{-9,72},{-10,72},{-18,75},{-12,71},{-11,63},
+  {-5,70},{-17,75},{-14,72},{-16,67},{-8,53},{-14,59},{-9,52},{-11,68},{9,-2},
+  {30,-10},{31,-4},{33,-1},{33,7},{31,12},{37,23},{31,38},{20,64},{9,-2},
+  {30,-10},{31,-4},{33,-1},{33,7},{31,12},{37,23},{31,38},{20,64},{-9,71},
+  {-7,37},{-8,44},{-11,49},{-10,56},{-12,59},{-8,63},{-9,67},{-6,68},{-10,79},
+  {-3,78},{-8,74},{-9,72},{-10,72},{-18,75},{-12,71},{-11,63},{-5,70},
+  {-17,75},{-14,72},{-16,67},{-8,53},{-14,59},{-9,52},{-11,68},{-3,78},
+  {-8,74},{-9,72},{-10,72},{-18,75},{-12,71},{-11,63},{-5,70},{-17,75},
+  {-14,72},{-16,67},{-8,53},{-14,59},{-9,52},{-11,68},{9,-2},{30,-10},{31,-4},
+  {33,-1},{33,7},{31,12},{37,23},{31,38},{20,64},{9,-2},{30,-10},{31,-4},
+  {33,-1},{33,7},{31,12},{37,23},{31,38},{20,64},{-9,71},{-7,37},{-8,44},
+  {-11,49},{-10,56},{-12,59},{-8,63},{-9,67},{-6,68},{-10,79},{-22,127},
+  {-25,127},{-25,120},{-27,127},{-19,114},{-23,117},{-25,118},{-26,117},
+  {-24,113},{-28,118},{-31,120},{-37,124},{-10,94},{-15,102},{-10,99},
+  {-13,106},{-50,127},{-5,92},{17,57},{-5,86},{-13,94},{-12,91},{-2,77},
+  {0,71},{-1,73},{4,64},{-7,81},{5,64},{15,57},{1,67},{0,68},{-10,67},{1,68},
+  {0,77},{2,64},{0,68},{-5,78},{7,55},{5,59},{2,65},{14,54},{15,44},{5,60},
+  {2,70},{-22,127},{-25,127},{-25,120},{-27,127},{-19,114},{-23,117},
+  {-25,118},{-26,117},{-24,113},{-28,118},{-31,120},{-37,124},{-10,94},
+  {-15,102},{-10,99},{-13,106},{-50,127},{-5,92},{17,57},{-5,86},{-13,94},
+  {-12,91},{-2,77},{0,71},{-1,73},{4,64},{-7,81},{5,64},{15,57},{1,67},{0,68},
+  {-10,67},{1,68},{0,77},{2,64},{0,68},{-5,78},{7,55},{5,59},{2,65},{14,54},
+  {15,44},{5,60},{2,70},{17,-13},{16,-9},{17,-12},{27,-21},{37,-30},{41,-40},
+  {42,-41},{48,-47},{39,-32},{46,-40},{52,-51},{46,-41},{52,-39},{43,-19},
+  {32,11},{61,-55},{56,-46},{62,-50},{81,-67},{45,-20},{35,-2},{28,15},{34,1},
+  {39,1},{30,17},{20,38},{18,45},{15,54},{0,79},{36,-16},{37,-14},{37,-17},
+  {32,1},{34,15},{29,15},{24,25},{34,22},{31,16},{35,18},{31,28},{33,41},
+  {36,28},{27,47},{21,62},{17,-13},{16,-9},{17,-12},{27,-21},{37,-30},
+  {41,-40},{42,-41},{48,-47},{39,-32},{46,-40},{52,-51},{46,-41},{52,-39},
+  {43,-19},{32,11},{61,-55},{56,-46},{62,-50},{81,-67},{45,-20},{35,-2},
+  {28,15},{34,1},{39,1},{30,17},{20,38},{18,45},{15,54},{0,79},{36,-16},
+  {37,-14},{37,-17},{32,1},{34,15},{29,15},{24,25},{34,22},{31,16},{35,18},
+  {31,28},{33,41},{36,28},{27,47},{21,62},{-24,115},{-22,82},{-9,62},{0,53},
+  {0,59},{-14,85},{-13,89},{-13,94},{-11,92},{-29,127},{-21,100},{-14,57},
+  {-12,67},{-11,71},{-10,77},{-21,85},{-16,88},{-23,104},{-15,98},{-37,127},
+  {-10,82},{-8,48},{-8,61},{-8,66},{-7,70},{-14,75},{-10,79},{-9,83},{-12,92},
+  {-18,108},{-24,115},{-22,82},{-9,62},{0,53},{0,59},{-14,85},{-13,89},
+  {-13,94},{-11,92},{-29,127},{-21,100},{-14,57},{-12,67},{-11,71},{-10,77},
+  {-21,85},{-16,88},{-23,104},{-15,98},{-37,127},{-10,82},{-8,48},{-8,61},
+  {-8,66},{-7,70},{-14,75},{-10,79},{-9,83},{-12,92},{-18,108},{-5,79},
+  {-11,104},{-11,91},{-30,127},{-5,79},{-11,104},{-11,91},{-30,127},{-5,79},
+  {-11,104},{-11,91},{-30,127}}};
 
-/* ---- rh264_cabac.h ---- */
 /* rh264 CABAC arithmetic decoding engine (H.264 clause 9.3). I-slice only. */
 
 /* rh264_cabac is defined further up, next to struct rh264_video,
@@ -6890,189 +7728,6 @@ static RH264_INLINE int rh264_cb_bit(rh264_cabac *c)
 {
    return (int)rh264_cb_bits(c, 1);
 }
-
-static const int8_t rh264_cabac_init_PB[3][460][2]={
-{
- {20,-15},{2,54},{3,74},{20,-15},{2,54},{3,74},{-28,127},{-23,104},
- {-6,53},{-1,54},{7,51},{23,33},{23,2},{21,0},{1,9},{0,49},
- {-37,118},{5,57},{-13,78},{-11,65},{1,62},{12,49},{-4,73},{17,50},
- {18,64},{9,43},{29,0},{26,67},{16,90},{9,104},{-46,127},{-20,104},
- {1,67},{-13,78},{-11,65},{1,62},{-6,86},{-17,95},{-6,61},{9,45},
- {-3,69},{-6,81},{-11,96},{6,55},{7,67},{-5,86},{2,88},{0,58},
- {-3,76},{-10,94},{5,54},{4,69},{-3,81},{0,88},{-7,67},{-5,74},
- {-4,74},{-5,80},{-7,72},{1,58},{0,41},{0,63},{0,63},{0,63},
- {-9,83},{4,86},{0,97},{-7,72},{13,41},{3,62},{0,45},{-4,78},
- {-3,96},{-27,126},{-28,98},{-25,101},{-23,67},{-28,82},{-20,94},{-16,83},
- {-22,110},{-21,91},{-18,102},{-13,93},{-29,127},{-7,92},{-5,89},{-7,96},
- {-13,108},{-3,46},{-1,65},{-1,57},{-9,93},{-3,74},{-9,92},{-8,87},
- {-23,126},{5,54},{6,60},{6,59},{6,69},{-1,48},{0,68},{-4,69},
- {-8,88},{-2,85},{-6,78},{-1,75},{-7,77},{2,54},{5,50},{-3,68},
- {1,50},{6,42},{-4,81},{1,63},{-4,70},{0,67},{2,57},{-2,76},
- {11,35},{4,64},{1,61},{11,35},{18,25},{12,24},{13,29},{13,36},
- {-10,93},{-7,73},{-2,73},{13,46},{9,49},{-7,100},{9,53},{2,53},
- {5,53},{-2,61},{0,56},{0,56},{-13,63},{-5,60},{-1,62},{4,57},
- {-6,69},{4,57},{14,39},{4,51},{13,68},{3,64},{1,61},{9,63},
- {7,50},{16,39},{5,44},{4,52},{11,48},{-5,60},{-1,59},{0,59},
- {22,33},{5,44},{14,43},{-1,78},{0,60},{9,69},{11,28},{2,40},
- {3,44},{0,49},{0,46},{2,44},{2,51},{0,47},{4,39},{2,62},
- {6,46},{0,54},{3,54},{2,58},{4,63},{6,51},{6,57},{7,53},
- {6,52},{6,55},{11,45},{14,36},{8,53},{-1,82},{7,55},{-3,78},
- {15,46},{22,31},{-1,84},{25,7},{30,-7},{28,3},{28,4},{32,0},
- {34,-1},{30,6},{30,6},{32,9},{31,19},{26,27},{26,30},{37,20},
- {28,34},{17,70},{1,67},{5,59},{9,67},{16,30},{18,32},{18,35},
- {22,29},{24,31},{23,38},{18,43},{20,41},{11,63},{9,59},{9,64},
- {-1,94},{-2,89},{-9,108},{-6,76},{-2,44},{0,45},{0,52},{-3,64},
- {-2,59},{-4,70},{-4,75},{-8,82},{-17,102},{-9,77},{3,24},{0,42},
- {0,48},{0,55},{-6,59},{-7,71},{-12,83},{-11,87},{-30,119},{1,58},
- {-3,29},{-1,36},{1,38},{2,43},{-6,55},{0,58},{0,64},{-3,74},
- {-10,90},{0,70},{-4,29},{5,31},{7,42},{1,59},{-2,58},{-3,72},
- {-3,81},{-11,97},{0,58},{8,5},{10,14},{14,18},{13,27},{2,40},
- {0,58},{-3,70},{-6,79},{-8,85},{0,0},{-13,106},{-16,106},{-10,87},
- {-21,114},{-18,110},{-14,98},{-22,110},{-21,106},{-18,103},{-21,107},{-23,108},
- {-26,112},{-10,96},{-12,95},{-5,91},{-9,93},{-22,94},{-5,86},{9,67},
- {-4,80},{-10,85},{-1,70},{7,60},{9,58},{5,61},{12,50},{15,50},
- {18,49},{17,54},{10,41},{7,46},{-1,51},{7,49},{8,52},{9,41},
- {6,47},{2,55},{13,41},{10,44},{6,50},{5,53},{13,49},{4,63},
- {6,64},{-2,69},{-2,59},{6,70},{10,44},{9,31},{12,43},{3,53},
- {14,34},{10,38},{-3,52},{13,40},{17,32},{7,44},{7,38},{13,50},
- {10,57},{26,43},{14,11},{11,14},{9,11},{18,11},{21,9},{23,-2},
- {32,-15},{32,-15},{34,-21},{39,-23},{42,-33},{41,-31},{46,-28},{38,-12},
- {21,29},{45,-24},{53,-45},{48,-26},{65,-43},{43,-19},{39,-10},{30,9},
- {18,26},{20,27},{0,57},{-14,82},{-5,75},{-19,97},{-35,125},{27,0},
- {28,0},{31,-4},{27,6},{34,8},{30,10},{24,22},{33,19},{22,32},
- {26,31},{21,41},{26,44},{23,47},{16,65},{14,71},{8,60},{6,63},
- {17,65},{21,24},{23,20},{26,23},{27,32},{28,23},{28,24},{23,40},
- {24,32},{28,29},{23,42},{19,57},{22,53},{22,61},{11,86},{12,40},
- {11,51},{14,59},{-4,79},{-7,71},{-5,69},{-9,70},{-8,66},{-10,68},
- {-19,73},{-12,69},{-16,70},{-15,67},{-20,62},{-19,70},{-16,66},{-22,65},
- {-20,63},{9,-2},{26,-9},{33,-9},{39,-7},{41,-2},{45,3},{49,9},
- {45,27},{36,59},{-6,66},{-7,35},{-7,42},{-8,45},{-5,48},{-12,56},
- {-6,60},{-5,62},{-8,66},{-8,76},{-5,85},{-6,81},{-10,77},{-7,81},
- {-17,80},{-18,73},{-4,74},{-10,83},{-9,71},{-9,67},{-1,61},{-8,66},
- {-14,66},{0,59},{2,59},{21,-13},{33,-14},{39,-7},{46,-2},{51,2},
- {60,6},{61,17},{55,34},{42,62},
-},
-{
- {20,-15},{2,54},{3,74},{20,-15},{2,54},{3,74},{-28,127},{-23,104},
- {-6,53},{-1,54},{7,51},{22,25},{34,0},{16,0},{-2,9},{4,41},
- {-29,118},{2,65},{-6,71},{-13,79},{5,52},{9,50},{-3,70},{10,54},
- {26,34},{19,22},{40,0},{57,2},{41,36},{26,69},{-45,127},{-15,101},
- {-4,76},{-6,71},{-13,79},{5,52},{6,69},{-13,90},{0,52},{8,43},
- {-2,69},{-5,82},{-10,96},{2,59},{2,75},{-3,87},{-3,100},{1,56},
- {-3,74},{-6,85},{0,59},{-3,81},{-7,86},{-5,95},{-1,66},{-1,77},
- {1,70},{-2,86},{-5,72},{0,61},{0,41},{0,63},{0,63},{0,63},
- {-9,83},{4,86},{0,97},{-7,72},{13,41},{3,62},{13,15},{7,51},
- {2,80},{-39,127},{-18,91},{-17,96},{-26,81},{-35,98},{-24,102},{-23,97},
- {-27,119},{-24,99},{-21,110},{-18,102},{-36,127},{0,80},{-5,89},{-7,94},
- {-4,92},{0,39},{0,65},{-15,84},{-35,127},{-2,73},{-12,104},{-9,91},
- {-31,127},{3,55},{7,56},{7,55},{8,61},{-3,53},{0,68},{-7,74},
- {-9,88},{-13,103},{-13,91},{-9,89},{-14,92},{-8,76},{-12,87},{-23,110},
- {-24,105},{-10,78},{-20,112},{-17,99},{-78,127},{-70,127},{-50,127},{-46,127},
- {-4,66},{-5,78},{-4,71},{-8,72},{2,59},{-1,55},{-7,70},{-6,75},
- {-8,89},{-34,119},{-3,75},{32,20},{30,22},{-44,127},{0,54},{-5,61},
- {0,58},{-1,60},{-3,61},{-8,67},{-25,84},{-14,74},{-5,65},{5,52},
- {2,57},{0,61},{-9,69},{-11,70},{18,55},{-4,71},{0,58},{7,61},
- {9,41},{18,25},{9,32},{5,43},{9,47},{0,44},{0,51},{2,46},
- {19,38},{-4,66},{15,38},{12,42},{9,34},{0,89},{4,45},{10,28},
- {10,31},{33,-11},{52,-43},{18,15},{28,0},{35,-22},{38,-25},{34,0},
- {39,-18},{32,-12},{102,-94},{0,0},{56,-15},{33,-4},{29,10},{37,-5},
- {51,-29},{39,-9},{52,-34},{69,-58},{67,-63},{44,-5},{32,7},{55,-29},
- {32,1},{0,0},{27,36},{33,-25},{34,-30},{36,-28},{38,-28},{38,-27},
- {34,-18},{35,-16},{34,-14},{32,-8},{37,-6},{35,0},{30,10},{28,18},
- {26,25},{29,41},{0,75},{2,72},{8,77},{14,35},{18,31},{17,35},
- {21,30},{17,45},{20,42},{18,45},{27,26},{16,54},{7,66},{16,56},
- {11,73},{10,67},{-10,116},{-23,112},{-15,71},{-7,61},{0,53},{-5,66},
- {-11,77},{-9,80},{-9,84},{-10,87},{-34,127},{-21,101},{-3,39},{-5,53},
- {-7,61},{-11,75},{-15,77},{-17,91},{-25,107},{-25,111},{-28,122},{-11,76},
- {-10,44},{-10,52},{-10,57},{-9,58},{-16,72},{-7,69},{-4,69},{-5,74},
- {-9,86},{2,66},{-9,34},{1,32},{11,31},{5,52},{-2,55},{-2,67},
- {0,73},{-8,89},{3,52},{7,4},{10,8},{17,8},{16,19},{3,37},
- {-1,61},{-5,73},{-1,70},{-4,78},{0,0},{-21,126},{-23,124},{-20,110},
- {-26,126},{-25,124},{-17,105},{-27,121},{-27,117},{-17,102},{-26,117},{-27,116},
- {-33,122},{-10,95},{-14,100},{-8,95},{-17,111},{-28,114},{-6,89},{-2,80},
- {-4,82},{-9,85},{-8,81},{-1,72},{5,64},{1,67},{9,56},{0,69},
- {1,69},{7,69},{-7,69},{-6,67},{-16,77},{-2,64},{2,61},{-6,67},
- {-3,64},{2,57},{-3,65},{-3,66},{0,62},{9,51},{-1,66},{-2,71},
- {-2,75},{-1,70},{-9,72},{14,60},{16,37},{0,47},{18,35},{11,37},
- {12,41},{10,41},{2,48},{12,41},{13,41},{0,59},{3,50},{19,40},
- {3,66},{18,50},{19,-6},{18,-6},{14,0},{26,-12},{31,-16},{33,-25},
- {33,-22},{37,-28},{39,-30},{42,-30},{47,-42},{45,-36},{49,-34},{41,-17},
- {32,9},{69,-71},{63,-63},{66,-64},{77,-74},{54,-39},{52,-35},{41,-10},
- {36,0},{40,-1},{30,14},{28,26},{23,37},{12,55},{11,65},{37,-33},
- {39,-36},{40,-37},{38,-30},{46,-33},{42,-30},{40,-24},{49,-29},{38,-12},
- {40,-10},{38,-3},{46,-5},{31,20},{29,30},{25,44},{12,48},{11,49},
- {26,45},{22,22},{23,22},{27,21},{33,20},{26,28},{30,24},{27,34},
- {18,42},{25,39},{18,50},{12,70},{21,54},{14,71},{11,83},{25,32},
- {21,49},{21,54},{-5,85},{-6,81},{-10,77},{-7,81},{-17,80},{-18,73},
- {-4,74},{-10,83},{-9,71},{-9,67},{-1,61},{-8,66},{-14,66},{0,59},
- {2,59},{17,-10},{32,-13},{42,-9},{49,-5},{53,0},{64,3},{68,10},
- {66,27},{47,57},{-5,71},{0,24},{-1,36},{-2,42},{-2,52},{-9,57},
- {-6,63},{-4,65},{-4,67},{-7,82},{-3,81},{-3,76},{-7,72},{-6,78},
- {-12,72},{-14,68},{-3,70},{-6,76},{-5,66},{-5,62},{0,57},{-4,61},
- {-9,60},{1,54},{2,58},{17,-10},{32,-13},{42,-9},{49,-5},{53,0},
- {64,3},{68,10},{66,27},{47,57},
-},
-{
- {20,-15},{2,54},{3,74},{20,-15},{2,54},{3,74},{-28,127},{-23,104},
- {-6,53},{-1,54},{7,51},{29,16},{25,0},{14,0},{-10,51},{-3,62},
- {-27,99},{26,16},{-4,85},{-24,102},{5,57},{6,57},{-17,73},{14,57},
- {20,40},{20,10},{29,0},{54,0},{37,42},{12,97},{-32,127},{-22,117},
- {-2,74},{-4,85},{-24,102},{5,57},{-6,93},{-14,88},{-6,44},{4,55},
- {-11,89},{-15,103},{-21,116},{19,57},{20,58},{4,84},{6,96},{1,63},
- {-5,85},{-13,106},{5,63},{6,75},{-3,90},{-1,101},{3,55},{-4,79},
- {-2,75},{-12,97},{-7,50},{1,60},{0,41},{0,63},{0,63},{0,63},
- {-9,83},{4,86},{0,97},{-7,72},{13,41},{3,62},{7,34},{-9,88},
- {-20,127},{-36,127},{-17,91},{-14,95},{-25,84},{-25,86},{-12,89},{-17,91},
- {-31,127},{-14,76},{-18,103},{-13,90},{-37,127},{11,80},{5,76},{2,84},
- {5,78},{-6,55},{4,61},{-14,83},{-37,127},{-5,79},{-11,104},{-11,91},
- {-30,127},{0,65},{-2,79},{0,72},{-4,92},{-6,56},{3,68},{-8,71},
- {-13,98},{-4,86},{-12,88},{-5,82},{-3,72},{-4,67},{-8,72},{-16,89},
- {-9,69},{-1,59},{5,66},{4,57},{-4,71},{-2,71},{2,58},{-1,74},
- {-4,44},{-1,69},{0,62},{-7,51},{-4,47},{-6,42},{-3,41},{-6,53},
- {8,76},{-9,78},{-11,83},{9,52},{0,67},{-5,90},{1,67},{-15,72},
- {-5,75},{-8,80},{-21,83},{-21,64},{-13,31},{-25,64},{-29,94},{9,75},
- {17,63},{-8,74},{-5,35},{-2,27},{13,91},{3,65},{-7,69},{8,77},
- {-10,66},{3,62},{-3,68},{-20,81},{0,30},{1,7},{-3,23},{-21,74},
- {16,66},{-23,124},{17,37},{44,-18},{50,-34},{-22,127},{4,39},{0,42},
- {7,34},{11,29},{8,31},{6,37},{7,42},{3,40},{8,33},{13,43},
- {13,36},{4,47},{3,55},{2,58},{6,60},{8,44},{11,44},{14,42},
- {7,48},{4,56},{4,52},{13,37},{9,49},{19,58},{10,48},{12,45},
- {0,69},{20,33},{8,63},{35,-18},{33,-25},{28,-3},{24,10},{27,0},
- {34,-14},{52,-44},{39,-24},{19,17},{31,25},{36,29},{24,33},{34,15},
- {30,20},{22,73},{20,34},{19,31},{27,44},{19,16},{15,36},{15,36},
- {21,28},{25,21},{30,20},{31,12},{27,16},{24,42},{0,93},{14,56},
- {15,57},{26,38},{-24,127},{-24,115},{-22,82},{-9,62},{0,53},{0,59},
- {-14,85},{-13,89},{-13,94},{-11,92},{-29,127},{-21,100},{-14,57},{-12,67},
- {-11,71},{-10,77},{-21,85},{-16,88},{-23,104},{-15,98},{-37,127},{-10,82},
- {-8,48},{-8,61},{-8,66},{-7,70},{-14,75},{-10,79},{-9,83},{-12,92},
- {-18,108},{-4,79},{-22,69},{-16,75},{-2,58},{1,58},{-13,78},{-9,83},
- {-4,81},{-13,99},{-13,81},{-6,38},{-13,62},{-6,58},{-2,59},{-16,73},
- {-10,76},{-13,86},{-9,83},{-10,87},{0,0},{-22,127},{-25,127},{-25,120},
- {-27,127},{-19,114},{-23,117},{-25,118},{-26,117},{-24,113},{-28,118},{-31,120},
- {-37,124},{-10,94},{-15,102},{-10,99},{-13,106},{-50,127},{-5,92},{17,57},
- {-5,86},{-13,94},{-12,91},{-2,77},{0,71},{-1,73},{4,64},{-7,81},
- {5,64},{15,57},{1,67},{0,68},{-10,67},{1,68},{0,77},{2,64},
- {0,68},{-5,78},{7,55},{5,59},{2,65},{14,54},{15,44},{5,60},
- {2,70},{-2,76},{-18,86},{12,70},{5,64},{-12,70},{11,55},{5,56},
- {0,69},{2,65},{-6,74},{5,54},{7,54},{-6,76},{-11,82},{-2,77},
- {-2,77},{25,42},{17,-13},{16,-9},{17,-12},{27,-21},{37,-30},{41,-40},
- {42,-41},{48,-47},{39,-32},{46,-40},{52,-51},{46,-41},{52,-39},{43,-19},
- {32,11},{61,-55},{56,-46},{62,-50},{81,-67},{45,-20},{35,-2},{28,15},
- {34,1},{39,1},{30,17},{20,38},{18,45},{15,54},{0,79},{36,-16},
- {37,-14},{37,-17},{32,1},{34,15},{29,15},{24,25},{34,22},{31,16},
- {35,18},{31,28},{33,41},{36,28},{27,47},{21,62},{18,31},{19,26},
- {36,24},{24,23},{27,16},{24,30},{31,29},{22,41},{22,42},{16,60},
- {15,52},{14,60},{3,78},{-16,123},{21,53},{22,56},{25,61},{21,33},
- {19,50},{17,61},{-3,78},{-8,74},{-9,72},{-10,72},{-18,75},{-12,71},
- {-11,63},{-5,70},{-17,75},{-14,72},{-16,67},{-8,53},{-14,59},{-9,52},
- {-11,68},{9,-2},{30,-10},{31,-4},{33,-1},{33,7},{31,12},{37,23},
- {31,38},{20,64},{-9,71},{-7,37},{-8,44},{-11,49},{-10,56},{-12,59},
- {-8,63},{-9,67},{-6,68},{-10,79},{-3,78},{-8,74},{-9,72},{-10,72},
- {-18,75},{-12,71},{-11,63},{-5,70},{-17,75},{-14,72},{-16,67},{-8,53},
- {-14,59},{-9,52},{-11,68},{9,-2},{30,-10},{31,-4},{33,-1},{33,7},
- {31,12},{37,23},{31,38},{20,64},
-},
-};
 
 static void rh264_cabac_init_engine(rh264_cabac *c,
       const uint8_t *buf, const uint8_t *end)
@@ -7102,9 +7757,6 @@ static void rh264_cabac_init_contexts(rh264_cabac *c, int sliceQP, int init_idc)
       if (pre <= 63) c->state[i] = (uint8_t)((63 - pre) * 2);
       else           c->state[i] = (uint8_t)((pre - 64) * 2 + 1);
    }
-   /* contexts above the extracted range default to a neutral state; they are
-    * only used by High-profile 8x8 residual, which this decoder rejects. */
-   for (; i < 1024; i++) c->state[i] = 0;
    for (i = 0; i < 128; i++)
    {
       int st = i >> 1, mp = i & 1;
@@ -7203,6 +7855,28 @@ static const int rh264_cbf_catoff[5]  = {0,4,8,12,16};
 static const int rh264_sig_catoff[5]  = {0,15,29,44,47};
 static const int rh264_last_catoff[5] = {0,15,29,44,47};
 static const int rh264_abs_catoff[5]  = {0,10,20,30,39};
+/* The 4:4:4 categories (Table 9-42): Cb and Cr each get the four luma
+ * shapes - 6/10 Intra16x16 DC, 7/11 Intra16x16 AC, 8/12 4x4, 9/13 8x8
+ * - on their own context ranges (Table 9-34).  Per category: coded_
+ * block_flag base, significant / last (frame then field), and
+ * coeff_abs_level_minus1. */
+typedef struct { short cbf, sig, sigf, last, lastf, abs; } rh264_cat444;
+static const rh264_cat444 rh264_cat444_ctx[14] = {
+   {  85,105,277,166,338,227},  /* 0  - the 4:2:x luma/chroma table  */
+   {  89,120,292,181,353,237},  /* 1     (kept for symmetry; the     */
+   {  93,134,306,195,367,247},  /* 2      0..4 rows are not consulted) */
+   {  97,149,321,210,382,257},  /* 3  */
+   { 101,152,324,213,385,266},  /* 4  */
+   {1012,402,436,417,451,426},  /* 5  luma 8x8: cbf only in 4:4:4   */
+   { 460,484,776,572,864,952},  /* 6  Cb DC   */
+   { 464,499,791,587,879,962},  /* 7  Cb AC   */
+   { 468,513,805,601,893,972},  /* 8  Cb 4x4  */
+   {1016,660,675,690,699,708},  /* 9  Cb 8x8  */
+   { 472,528,820,616,908,982},  /* 10 Cr DC   */
+   { 476,543,835,631,923,992},  /* 11 Cr AC   */
+   { 480,557,849,645,937,1002}, /* 12 Cr 4x4  */
+   {1020,718,733,748,757,766}   /* 13 Cr 8x8  */
+};
 
 /* 8x8 blocks (ctxBlockCat 5) sit in their own context blocks: significance
  * at 402 through the position map of Table 9-43 (frame scan), last at 417
@@ -7253,13 +7927,49 @@ static const uint8_t rh264_sig_cdc422[8]={0,0,1,1,2,2,2,2};
 /* Decode one residual block into coef[] (zig-zag order, length maxNumCoeff).
  * cat = ctxBlockCat (0=I16 lumaDC,1=I16 lumaAC,2=luma4x4,3=chromaDC,4=chromaAC).
  * cbf_ctxinc = coded_block_flag ctxIdxInc from neighbours. Returns coeff count. */
+/* ctxIdxInc of the coded_block_flag of an 8x8 block (9.3.3.1.1.9,
+ * ctxBlockCat 5 / 9 / 13), coded only in 4:4:4.  The neighbouring
+ * 8x8 block counts when its macroblock is available, used the 8x8
+ * transform and has that block's coded_block_pattern bit set; an
+ * unavailable neighbour reads as 1 for an intra macroblock, an I_PCM
+ * neighbour as 1, anything else as 0.  'blk' points at the plane's
+ * per-4x4 flags (an 8x8's flag replicated into its four entries). */
+static int rh264_cbf8_ctx(int b8, int cbp_luma, int cur_t8,
+      const int *cblk, const rh264_cbf *L, const int *lblk,
+      const rh264_cbf *U, const int *ublk, int have_left, int have_up,
+      int intra)
+{
+   int bx8 = b8 & 1, by8 = b8 >> 1, a, b;
+   if (bx8)
+      a = ((cbp_luma >> (b8 - 1)) & 1) && cur_t8 ? cblk[(by8*2)*4 + 0] : 0;
+   else if (!have_left || !L->avail)
+      a = intra ? 1 : 0;
+   else if (L->pcm)
+      a = 1;
+   else
+      a = (L->t8 && ((L->cbpLuma >> (b8 + 1)) & 1)) ? lblk[(by8*2)*4 + 2] : 0;
+   if (by8)
+      b = ((cbp_luma >> (b8 - 2)) & 1) && cur_t8 ? cblk[0*4 + bx8*2] : 0;
+   else if (!have_up || !U->avail)
+      b = intra ? 1 : 0;
+   else if (U->pcm)
+      b = 1;
+   else
+      b = (U->t8 && ((U->cbpLuma >> (b8 + 2)) & 1)) ? ublk[2*4 + bx8*2] : 0;
+   return a + 2*b;
+}
+
 static int rh264_cabac_residual(rh264_cabac *c, int cat, int cbf_ctxinc,
       int maxNumCoeff, int32_t *coef)
 {
    int i, coded, nsig=0, sig[64];
+   int is8 = (cat == 5 || cat == 9 || cat == 13);
+   const rh264_cat444 *cx = (cat >= 5) ? &rh264_cat444_ctx[cat] : NULL;
    for (i = 0; i < maxNumCoeff; i++) coef[i] = 0;
-   if (cat == 5)
-      coded = 1;   /* implied by the coded_block_pattern bit */
+   if (cat == 5 && !c->c444)
+      coded = 1;   /* implied by the coded_block_pattern bit (4:2:x) */
+   else if (cx)
+      coded = rh264_cabac_decode(c, cx->cbf + cbf_ctxinc);
    else
       coded = rh264_cabac_decode(c,
             CTX_CBF + rh264_cbf_catoff[cat] + cbf_ctxinc);
@@ -7271,12 +7981,18 @@ static int rh264_cabac_residual(rh264_cabac *c, int cat, int cbf_ctxinc,
    {
       const uint8_t *sm, *lm;
       int sbase, lbase;
-      if (cat == 5)
+      if (is8)
       {
          sm    = c->field ? rh264_sig8map_fld : rh264_sig8map;
          lm    = rh264_last8map;
-         sbase = c->field ? RH264_CTX_SIG8_F  : RH264_CTX_SIG8;
-         lbase = c->field ? RH264_CTX_LAST8_F : RH264_CTX_LAST8;
+         sbase = c->field ? cx->sigf  : cx->sig;
+         lbase = c->field ? cx->lastf : cx->last;
+      }
+      else if (cx)
+      {
+         sm = lm = rh264_sig_ident;
+         sbase = c->field ? cx->sigf  : cx->sig;
+         lbase = c->field ? cx->lastf : cx->last;
       }
       else
       {
@@ -7308,8 +8024,7 @@ static int rh264_cabac_residual(rh264_cabac *c, int cat, int cbf_ctxinc,
    {
       int k;
       int c1 = 1, c2 = 0;
-      int oneoff = (cat==5) ? RH264_CTX_ABS8
-                            : CTX_ABS + rh264_abs_catoff[cat];
+      int oneoff = cx ? cx->abs : CTX_ABS + rh264_abs_catoff[cat];
       int absoff = oneoff + 5;
       int maxc2  = (cat==3) ? 3 : 4;                       /* g_kMaxC2      */
       for (k = nsig-1; k >= 0; k--)
@@ -7384,6 +8099,200 @@ static int rh264_cbf_cac_ctx_n(int comp,int idx,rh264_cbf *cur,
  * (ctxIdxOffset 3) and the intra suffix inside a P slice (offset 17, Table
  * 9-39). When pskip_prefix is set the intra/inter prefix bin has already been
  * consumed by the P-slice caller. */
+/* 4:4:4: one chroma plane of a CABAC intra macroblock, decoded as
+ * luma with the plane's categories (Cb 6..9, Cr 10..13), the plane's
+ * own coded_block_flag state (cur->cb / cr), the luma prediction
+ * modes, the chroma qP and weight matrices.  Bitstream order: after
+ * all of luma, Cb then Cr. */
+static int rh264_cabac_intra_plane444(rh264_cabac *cb, rh264_frame *f,
+      int comp, int mbx, int mby, int is_i16, int t8,
+      int i16mode, int cbp_luma, rh264_cbf *cur, const rh264_cbf *L,
+      const rh264_cbf *U, int have_up, int have_left, int have_ur,
+      int have_ul)
+{
+   int gw = f->mbw*4, gx0 = mbx*4, gy0 = mby*4;
+   int stride = f->cstride;
+   uint8_t *P = (comp ? f->V : f->U) + (size_t)mby*16*stride + mbx*16;
+   uint8_t *nz = f->nzC[comp];
+   int *cblk = comp ? cur->cr : cur->cb;
+   const int *lblk = comp ? L->cr : L->cb, *ublk = comp ? U->cr : U->cb;
+   int *cdc = comp ? &cur->crDC : &cur->cbDC;
+   int ldc = comp ? L->crDC : L->cbDC, udc = comp ? U->crDC : U->cbDC;
+   int cat_dc = comp ? 10 : 6, cat_ac = comp ? 11 : 7;
+   int cat_4 = comp ? 12 : 8, cat_8 = comp ? 13 : 9;
+   int qpc = rh264_chroma_qp(f->qp,
+         comp ? f->chroma_qp_offset2 : f->chroma_qp_offset);
+   const uint8_t *w4 = f->w4[1 + comp];
+   const uint8_t *w8 = f->w8[2 + 2*comp];
+   int tb = RH264_TB(f);
+   int k, bx, by;
+
+   if (is_i16)
+   {
+      int32_t dc[16], tmp[16], tbres[256];
+      int bi;
+      rh264_intra16x16(P, stride, i16mode, have_up, have_left);
+      {
+         int a = have_left ? (L->avail ? ldc : 1) : 1;
+         int b = have_up   ? (U->avail ? udc : 1) : 1;
+         int ndc = rh264_cabac_residual(cb, cat_dc, a + 2*b, 16, dc);
+         *cdc = ndc ? 1 : 0;
+      }
+      {
+         int32_t hin[16], hout[16];
+         { const uint8_t *sc = RH264_SCAN4(f);
+           for (k = 0; k < 16; k++) hin[sc[k]] = dc[k]; }
+         if (tb) { for (k = 0; k < 16; k++) tmp[k] = hin[k]; }
+         else
+         {
+            int per = qpc/6, rem = qpc%6;
+            int LS = w4[0]*rh264_dequant4_v[rem][0];
+            rh264_ihadamard4x4(hin, hout);
+            for (k = 0; k < 16; k++)
+            {
+               int32_t val = hout[k];
+               if (per >= 6) val = (int32_t)(((uint32_t)(val*LS)) << (per-6));
+               else          val = (val*LS + (1 << (5-per))) >> (6-per);
+               tmp[k] = val;
+            }
+         }
+      }
+      for (bi = 0; bi < 16; bi++)
+      {
+         int32_t ac[16], r[16];
+         int raster, nzf = 0;
+         bx = rh264_blk_x[bi]; by = rh264_blk_y[bi]; raster = by*4 + bx;
+         for (k = 0; k < 16; k++) ac[k] = 0;
+         if (cbp_luma)
+         {
+            int32_t scan[16];
+            int a = (bx > 0) ? cblk[raster-1] : (L->avail ? lblk[by*4+3] : 1);
+            int b = (by > 0) ? cblk[raster-4] : (U->avail ? ublk[12+bx] : 1);
+            nzf = rh264_cabac_residual(cb, cat_ac, a + 2*b, 15, scan);
+            { const uint8_t *sc = RH264_SCAN4(f);
+              for (k = 0; k < 15; k++) ac[sc[k+1]] = scan[k]; }
+            cblk[raster] = nzf ? 1 : 0;
+         }
+         ac[0] = tmp[raster];
+         if (tb) rh264_tb_put4(tbres, 16, bx, by, ac);
+         else
+         {
+            int32_t q[16];
+            for (k = 0; k < 16; k++) q[k] = ac[k];
+            rh264_dequant4x4(q, qpc, 1, w4); q[0] = ac[0];
+            rh264_itransform4x4(q, r);
+            rh264_add_residual(P + (by*4)*stride + bx*4, stride, r, 4);
+         }
+         nz[(gy0+by)*gw + gx0+bx] = (uint8_t)cblk[raster];
+      }
+      if (tb)
+      {
+         rh264_tb_dpcm(tbres, 16, 16, rh264_tb_luma_dpcm(i16mode));
+         rh264_add_bypass(P, stride, tbres, 16, 16, 16);
+      }
+      return 0;
+   }
+   if (t8)
+   {
+      int b8;
+      for (b8 = 0; b8 < 4; b8++)
+      {
+         int bx8 = (b8 & 1), by8 = (b8 >> 1);
+         uint8_t *d = P + (by8*8)*stride + bx8*8;
+         /* the luma pass resolved the predicted modes into the grid */
+         int mode = f->i4mode[(gy0+by8*2)*gw + gx0+bx8*2];
+         int hu = by8 || have_up, hl = bx8 || have_left;
+         int hul = (bx8 && by8) ? 1 : (bx8 ? have_up : (by8 ? have_left : have_ul));
+         int hur = (b8 == 0) ? have_up : (b8 == 1) ? have_ur : (b8 == 2) ? 1 : 0;
+         int coded, cy2, cx2;
+         rh264_intra8x8(d, stride, mode, hu, hl, hul, hur);
+         coded = (cbp_luma >> b8) & 1;
+         if (coded)
+         {
+            int32_t *scan = cb->r8_scan, *coef = cb->r8_coef, *r = cb->r8_r;
+            int inc = rh264_cbf8_ctx(b8, cbp_luma, 1, cblk, L, lblk, U, ublk,
+                  have_left, have_up, 1);
+            if (!rh264_cabac_residual(cb, cat_8, inc, 64, scan))
+               coded = 0;
+            for (k = 0; k < 64; k++) coef[k] = 0;
+            { const uint8_t *sc = RH264_SCAN8(f);
+              for (k = 0; k < 64; k++) coef[sc[k]] = scan[k]; }
+            if (!coded) {}
+            else if (tb)
+            {
+               rh264_tb_dpcm(coef, 8, 8, rh264_tb_luma_dpcm(mode));
+               rh264_add_bypass(d, stride, coef, 8, 8, 8);
+            }
+            else
+            {
+               rh264_dequant8x8(coef, qpc, w8);
+               rh264_itransform8x8(coef, r);
+               rh264_add_residual(d, stride, r, 8);
+            }
+         }
+         for (cy2 = 0; cy2 < 2; cy2++) for (cx2 = 0; cx2 < 2; cx2++)
+         {
+            cblk[(by8*2+cy2)*4 + bx8*2+cx2] = coded;
+            nz[(gy0+by8*2+cy2)*gw + gx0+bx8*2+cx2] = (uint8_t)coded;
+         }
+      }
+      return 0;
+   }
+   {
+      int bi;
+      for (bi = 0; bi < 16; bi++)
+      {
+         int raster, mode;
+         uint8_t *d;
+         int hu, hl, hur, hulb, nzf = 0;
+         int32_t coef[16], r[16];
+         bx = rh264_blk_x[bi]; by = rh264_blk_y[bi]; raster = by*4 + bx;
+         mode = f->i4mode[(gy0+by)*gw + gx0+bx];   /* resolved by luma */
+         d  = P + (by*4)*stride + bx*4;
+         hu = (by > 0) || have_up; hl = (bx > 0) || have_left;
+         switch (bi)
+         {
+            case 2: case 6: case 8: case 9: case 10: case 12: case 14:
+               hur = 1; break;
+            case 3: case 11: case 13: case 15:
+               hur = 0; break;
+            case 0: case 1: case 4:
+               hur = have_up; break;
+            case 5:
+               hur = have_ur; break;
+            default:
+               hur = 0; break;
+         }
+         hulb = (bx && by) ? 1 : (bx ? hu : (by ? hl : have_ul));
+         rh264_intra4x4(d, stride, mode, hu, hl, hur, hulb);
+         for (k = 0; k < 16; k++) coef[k] = 0;
+         if (cbp_luma & (1 << (((by>>1)*2) + (bx>>1))))
+         {
+            int a = (bx > 0) ? cblk[raster-1] : (L->avail ? lblk[by*4+3] : 1);
+            int b = (by > 0) ? cblk[raster-4] : (U->avail ? ublk[12+bx] : 1);
+            int32_t scan[16];
+            nzf = rh264_cabac_residual(cb, cat_4, a + 2*b, 16, scan);
+            { const uint8_t *sc = RH264_SCAN4(f);
+              for (k = 0; k < 16; k++) coef[sc[k]] = scan[k]; }
+            cblk[raster] = nzf ? 1 : 0;
+            if (tb)
+            {
+               rh264_tb_dpcm(coef, 4, 4, rh264_tb_luma_dpcm(mode));
+               rh264_add_bypass(d, stride, coef, 4, 4, 4);
+            }
+            else
+            {
+               rh264_dequant4x4(coef, qpc, 0, w4);
+               rh264_itransform4x4(coef, r);
+               rh264_add_residual(d, stride, r, 4);
+            }
+         }
+         nz[(gy0+by)*gw + gx0+bx] = (uint8_t)cblk[raster];
+      }
+   }
+   return 0;
+}
+
 static int rh264_cabac_decode_mb_ctx(rh264_cabac *cb, const rh264_sps *sps,
       const rh264_pps *pps, rh264_frame *f, int mbx, int mby,
       int *prevQpDeltaNZ, rh264_cbf *cur, rh264_cbf *L, rh264_cbf *U,
@@ -7411,8 +8320,8 @@ static int rh264_cabac_decode_mb_ctx(rh264_cabac *cb, const rh264_sps *sps,
    int t8 = 0;
    int modes[16];
    uint8_t *Y=f->Y+(mby*16)*f->ystride+mbx*16;
-   uint8_t *U8=f->U+(mby*f->cmbh)*f->cstride+mbx*8;
-   uint8_t *V8=f->V+(mby*f->cmbh)*f->cstride+mbx*8;
+   uint8_t *U8=f->U+(mby*f->cmbh)*f->cstride+mbx*(f->c444?16:8);
+   uint8_t *V8=f->V+(mby*f->cmbh)*f->cstride+mbx*(f->c444?16:8);
    memset(cur,0,sizeof(*cur)); cur->avail=1;
 
    /* mb_type bin0 ctxIdxInc: neighbours available & NOT I_4x4 */
@@ -7437,17 +8346,17 @@ static int rh264_cabac_decode_mb_ctx(rh264_cabac *cb, const rh264_sps *sps,
           * everything after the first I_PCM (x264 emits I_PCM in its
           * lossless mode on noisy content).  The engine restarts behind
           * the samples with its context variables kept (9.3.1.2). */
-         int r, c2, k, ch = f->cmbh;
+         int r, c2, k, ch = f->cmbh, cw = f->c444 ? 16 : 8;
          int back = cb->bitcnt - 1;
          if (back >= 0) cb->buf -= back >> 3;
          else           cb->buf += 1;
          cb->bitcnt = 0;
-         if (cb->end - cb->buf < 256 + ch*8*2) return -1;
+         if (cb->end - cb->buf < 256 + ch*cw*2) return -1;
          for (r = 0; r < 16; r++) for (c2 = 0; c2 < 16; c2++)
             Y[r*f->ystride + c2] = *cb->buf++;
-         for (r = 0; r < ch; r++) for (c2 = 0; c2 < 8; c2++)
+         for (r = 0; r < ch; r++) for (c2 = 0; c2 < cw; c2++)
             U8[r*f->cstride + c2] = *cb->buf++;
-         for (r = 0; r < ch; r++) for (c2 = 0; c2 < 8; c2++)
+         for (r = 0; r < ch; r++) for (c2 = 0; c2 < cw; c2++)
             V8[r*f->cstride + c2] = *cb->buf++;
          rh264_cabac_init_engine(cb, cb->buf, cb->end);
          /* neighbour state: mb_type counts as not-I_NxN (9.3.3.1.1.3),
@@ -7455,8 +8364,10 @@ static int rh264_cabac_decode_mb_ctx(rh264_cabac *cb, const rh264_sps *sps,
           * prediction modes read as DC (8.3.1.1), and coefficient counts
           * are 16 (9.2.1). QP is unchanged: I_PCM carries no delta. */
          cur->is_i16 = 1;
+         cur->pcm = 1;
          cur->cbpLuma = 15; cur->cbpChroma = 2;   /* inferred, 7.4.5 */
-         for (k = 0; k < 16; k++) cur->luma[k] = 1;
+         for (k = 0; k < 16; k++) cur->luma[k] = cur->cb[k] = cur->cr[k] = 1;
+         cur->cbDC = cur->crDC = 1;
          cur->cDC[0] = cur->cDC[1] = 1;
          /* two columns of chroma blocks, ch/4 rows of them */
          for (k = 0; k < (ch/4)*2; k++) cur->cAC[0][k] = cur->cAC[1][k] = 1;
@@ -7464,7 +8375,13 @@ static int rh264_cabac_decode_mb_ctx(rh264_cabac *cb, const rh264_sps *sps,
          {
             f->nzL[(gy0+r)*gw + gx0+c2] = 16;
             f->i4mode[(gy0+r)*gw + gx0+c2] = 0xff;
+            if (f->c444)
+            {
+               f->nzC[0][(gy0+r)*gw + gx0+c2] = 16;
+               f->nzC[1][(gy0+r)*gw + gx0+c2] = 16;
+            }
          }
+         if (!f->c444)
          for (r = 0; r < f->cmbh/4; r++) for (c2 = 0; c2 < 2; c2++)
          {
             f->nzC[0][(mby*(f->cmbh/4)+r)*cgw + mbx*2+c2] = 16;
@@ -7505,7 +8422,13 @@ static int rh264_cabac_decode_mb_ctx(rh264_cabac *cb, const rh264_sps *sps,
    }
    cur->t8 = t8;
    f->mbt8[mby * f->mbw + mbx] = (uint8_t)t8;
-   /* intra_chroma_pred_mode: TU cMax=3 (decoded for BOTH I_4x4 and I_16x16) */
+   /* intra_chroma_pred_mode: TU cMax=3 (decoded for BOTH I_4x4 and
+    * I_16x16); absent in 4:4:4, where the chroma planes take the luma
+    * modes */
+   if (f->c444)
+      chroma_mode = 0;
+   else
+   {
    ctxInc = (have_left && L->avail && L->chroma_nz?1:0)
           + (have_up   && U->avail && U->chroma_nz?1:0);
    if (!rh264_cabac_decode(cb, CTX_CHROMA_PRED + ctxInc))
@@ -7514,6 +8437,7 @@ static int rh264_cabac_decode_mb_ctx(rh264_cabac *cb, const rh264_sps *sps,
       chroma_mode = 1;
    else
       chroma_mode = rh264_cabac_decode(cb, CTX_CHROMA_PRED+3) ? 3 : 2;
+   }
    cur->chroma_nz = (chroma_mode!=0);
    if (!is_i16) {
       /* CBP: luma 4 bins + chroma */
@@ -7532,7 +8456,11 @@ static int rh264_cabac_decode_mb_ctx(rh264_cabac *cb, const rh264_sps *sps,
         cbp_luma = 0;
         { int m; for(m=0;m<4;m++) if(cbp&(1<<m)) cbp_luma |= (1<<m); }
         cur->cbpLuma = cbp_luma;
-        /* chroma: bin0 (any) then bin1 (dc+ac) */
+        /* chroma: bin0 (any) then bin1 (dc+ac); no chroma bins at
+         * all in 4:4:4 (7.3.5, ChromaArrayType 3) */
+        if (f->c444)
+           cbp_chroma = 0;
+        else
         { int a,b,inc;
           a = L->avail ? (L->cbpChroma!=0?1:0):0;
           b = U->avail ? (U->cbpChroma!=0?1:0):0;
@@ -7667,11 +8595,15 @@ static int rh264_cabac_decode_mb_ctx(rh264_cabac *cb, const rh264_sps *sps,
          {
             int32_t *scan = cb->r8_scan, *coef = cb->r8_coef;
             int32_t *r = cb->r8_r;
-            rh264_cabac_residual(cb, 5, 0, 64, scan);
+            int inc = f->c444 ? rh264_cbf8_ctx(b8, cbp_luma, 1, cur->luma,
+                  L, L->luma, U, U->luma, have_left, have_up, 1) : 0;
+            if (!rh264_cabac_residual(cb, 5, inc, 64, scan) && f->c444)
+               coded = 0;   /* the 4:4:4 8x8 flag can say "nothing" */
             for (k = 0; k < 64; k++) coef[k] = 0;
             { const uint8_t *sc = RH264_SCAN8(f);
      for (k = 0; k < 64; k++) coef[sc[k]] = scan[k]; }
-            if (RH264_TB(f))
+            if (!coded) {}
+            else if (RH264_TB(f))
             {
                rh264_tb_dpcm(coef, 8, 8, rh264_tb_luma_dpcm(mode));
                rh264_add_bypass(d, f->ystride, coef, 8, 8, 8);
@@ -7761,6 +8693,19 @@ static int rh264_cabac_decode_mb_ctx(rh264_cabac *cb, const rh264_sps *sps,
       }
    }
 
+   if (f->c444)
+   {
+      /* 4:4:4: Cb then Cr, each as luma (7.3.5.3 residual_luma) */
+      if (rh264_cabac_intra_plane444(cb, f, 0, mbx, mby, is_i16, t8,
+               i16mode, cbp_luma, cur, L, U, have_up, have_left,
+               have_ur, have_ul) < 0
+          || rh264_cabac_intra_plane444(cb, f, 1, mbx, mby, is_i16, t8,
+               i16mode, cbp_luma, cur, L, U, have_up, have_left,
+               have_ur, have_ul) < 0)
+         return -1;
+   }
+   else
+   {
    /* chroma prediction + residual (4:2:0). Bitstream order (7.3.5.3.1):
     * both chroma DC blocks first, then all chroma AC blocks. */
    rh264_intra_chroma_h(U8,f->cstride,chroma_mode,have_up,have_left,f->cmbh);
@@ -7847,6 +8792,7 @@ static int rh264_cabac_decode_mb_ctx(rh264_cabac *cb, const rh264_sps *sps,
         }
      }
    }
+   }
    f->mbqp[mby*f->mbw+mbx]=(uint8_t)f->qp;
    (void)sps;
    return 0;
@@ -7881,7 +8827,8 @@ static int rh264_cabac_decode_islice(rh264_bits *b, const rh264_sps *sps,
    bytepos = (b->bitpos + 7) >> 3;
    rh264_cabac_init_engine(cb, b->buf + bytepos, b->buf + b->size);
    cb->field = f->field;
-   cb->c422 = (f->cmbh == 16);
+   cb->c422 = (f->cmbh == 16 && !f->c444);
+   cb->c444 = f->c444;
    rh264_cabac_init_contexts(cb, sh->slice_qp, -1);
    f->qp = sh->slice_qp;
    f->chroma_qp_offset = pps->chroma_qp_index_offset;
@@ -8092,15 +9039,109 @@ static void rh264_cabac_p_part(rh264_cabac *cb, rh264_frame *f,
 /* coded_block_flag ctxIdxInc for the blocks of an inter macroblock. An
  * unavailable neighbour gives condTermFlagN 0 here, where an intra macroblock
  * would use 1 (9.3.3.1.1.9). */
+/* The same over any plane's per-4x4 flags (4:4:4 Cb / Cr as luma). */
+static int rh264_cabac_pcbf_plane_ctx(int raster, const int *cblk,
+      const rh264_cbf *L, const int *lblk, const rh264_cbf *U,
+      const int *ublk, int have_left, int have_up)
+{
+   int bx = raster & 3, by = raster >> 2, a, b;
+   if (bx > 0) a = cblk[raster-1];
+   else        a = (have_left && L->avail) ? lblk[by*4+3] : 0;
+   if (by > 0) b = cblk[raster-4];
+   else        b = (have_up && U->avail) ? ublk[12+bx] : 0;
+   return a + 2*b;
+}
+
 static int rh264_cabac_pcbf_luma_ctx(int raster, rh264_cbf *cur,
       rh264_cbf *L, rh264_cbf *U, int have_left, int have_up)
 {
-   int bx = raster & 3, by = raster >> 2, a, b;
-   if (bx > 0) a = cur->luma[raster-1];
-   else        a = (have_left && L->avail) ? L->luma[by*4+3] : 0;
-   if (by > 0) b = cur->luma[raster-4];
-   else        b = (have_up && U->avail) ? U->luma[12+bx] : 0;
-   return a + 2*b;
+   return rh264_cabac_pcbf_plane_ctx(raster, cur->luma, L, L->luma,
+         U, U->luma, have_left, have_up);
+}
+
+/* 4:4:4: one chroma plane's residual of an inter macroblock, as luma
+ * (ctxBlockCat 8/9 for Cb, 12/13 for Cr), with the inter chroma qP
+ * and weight matrices.  cbp_luma covers all three planes. */
+static void rh264_cabac_p_plane444(rh264_cabac *cb, rh264_frame *f,
+      int comp, int mbx, int mby, int cbp_luma, rh264_cbf *cur,
+      const rh264_cbf *L, const rh264_cbf *U, int have_left, int have_up,
+      int t8)
+{
+   int gw = f->mbw*4, k, bi;
+   int stride = f->cstride;
+   uint8_t *P = (comp ? f->V : f->U) + (size_t)(mby*16)*stride + mbx*16;
+   uint8_t *nz = f->nzC[comp];
+   int *cblk = comp ? cur->cr : cur->cb;
+   const int *lblk = comp ? L->cr : L->cb, *ublk = comp ? U->cr : U->cb;
+   int cat_4 = comp ? 12 : 8, cat_8 = comp ? 13 : 9;
+   int qpc = rh264_chroma_qp(f->qp,
+         comp ? f->chroma_qp_offset2 : f->chroma_qp_offset);
+   const uint8_t *w4 = f->w4[4 + comp];
+   const uint8_t *w8 = f->w8[3 + 2*comp];
+   if (t8)
+   {
+      int b8;
+      for (b8 = 0; b8 < 4; b8++)
+      {
+         int bx8 = (b8 & 1), by8 = (b8 >> 1);
+         int coded = (cbp_luma >> b8) & 1;
+         int cy2, cx2;
+         if (coded)
+         {
+            int32_t *scan = cb->r8_scan, *coef = cb->r8_coef, *r = cb->r8_r;
+            uint8_t *d = P + (by8*8)*stride + bx8*8;
+            int inc = rh264_cbf8_ctx(b8, cbp_luma, 1, cblk, L, lblk, U, ublk,
+                  have_left, have_up, 0);
+            if (!rh264_cabac_residual(cb, cat_8, inc, 64, scan))
+               coded = 0;
+            { const uint8_t *sc = RH264_SCAN8(f);
+              for (k = 0; k < 64; k++) coef[sc[k]] = scan[k]; }
+            if (!coded) {}
+            else if (RH264_TB(f))
+               rh264_add_bypass(d, stride, coef, 8, 8, 8);
+            else
+            {
+               rh264_dequant8x8(coef, qpc, w8);
+               rh264_itransform8x8(coef, r);
+               rh264_add_residual(d, stride, r, 8);
+            }
+         }
+         for (cy2 = 0; cy2 < 2; cy2++) for (cx2 = 0; cx2 < 2; cx2++)
+         {
+            cblk[(by8*2+cy2)*4 + bx8*2+cx2] = coded;
+            nz[(mby*4+by8*2+cy2)*gw + mbx*4+bx8*2+cx2] = (uint8_t)coded;
+         }
+      }
+      return;
+   }
+   for (bi = 0; bi < 16; bi++)
+   {
+      int bx = rh264_blk_x[bi], by = rh264_blk_y[bi], raster = by*4 + bx;
+      int32_t coef[16], r[16];
+      int nzf = 0;
+      if (cbp_luma & (1 << (bi >> 2)))
+      {
+         int32_t scan[16];
+         int inc = rh264_cabac_pcbf_plane_ctx(raster, cblk, L, lblk, U, ublk,
+               have_left, have_up);
+         nzf = rh264_cabac_residual(cb, cat_4, inc, 16, scan);
+         if (nzf)
+         {
+            { const uint8_t *sc = RH264_SCAN4(f);
+              for (k = 0; k < 16; k++) coef[sc[k]] = scan[k]; }
+            if (RH264_TB(f))
+               rh264_add_bypass(P + (by*4)*stride + bx*4, stride, coef, 4, 4, 4);
+            else
+            {
+               rh264_dequant4x4(coef, qpc, 0, w4);
+               rh264_itransform4x4(coef, r);
+               rh264_add_residual(P + (by*4)*stride + bx*4, stride, r, 4);
+            }
+         }
+      }
+      cblk[raster] = nzf ? 1 : 0;
+      nz[(mby*4+by)*gw + mbx*4+bx] = (uint8_t)(nzf ? 1 : 0);
+   }
 }
 
 static int rh264_cabac_pcbf_cdc_ctx(int comp, rh264_cbf *L, rh264_cbf *U,
@@ -8134,8 +9175,8 @@ static void rh264_cabac_p_residual(rh264_cabac *cb, rh264_frame *f,
    uint8_t *planes[2];
    int32_t cdc[2][8];
    int nblk = (f->cmbh == 16) ? 8 : 4;
-   planes[0] = f->U + (mby*f->cmbh)*f->cstride + mbx*8;
-   planes[1] = f->V + (mby*f->cmbh)*f->cstride + mbx*8;
+   planes[0] = f->U + (mby*f->cmbh)*f->cstride + mbx*(f->c444 ? 16 : 8);
+   planes[1] = f->V + (mby*f->cmbh)*f->cstride + mbx*(f->c444 ? 16 : 8);
 
    if (t8)
    {
@@ -8151,10 +9192,14 @@ static void rh264_cabac_p_residual(rh264_cabac *cb, rh264_frame *f,
             int32_t *scan = cb->r8_scan, *coef = cb->r8_coef;
             int32_t *r = cb->r8_r;
             uint8_t *d = Y + (by8*8)*f->ystride + bx8*8;
-            rh264_cabac_residual(cb, 5, 0, 64, scan);
+            int inc = f->c444 ? rh264_cbf8_ctx(b8, cbp_luma, 1, cur->luma,
+                  L, L->luma, U, U->luma, have_left, have_up, 0) : 0;
+            if (!rh264_cabac_residual(cb, 5, inc, 64, scan) && f->c444)
+               coded = 0;
             { const uint8_t *sc = RH264_SCAN8(f);
      for (k = 0; k < 64; k++) coef[sc[k]] = scan[k]; }
-            if (RH264_TB(f))
+            if (!coded) {}
+            else if (RH264_TB(f))
                rh264_add_bypass(d, f->ystride, coef, 8, 8, 8);
             else
             {
@@ -8205,6 +9250,14 @@ static void rh264_cabac_p_residual(rh264_cabac *cb, rh264_frame *f,
       f->nzL[(mby*4+by)*gw + mbx*4+bx] = (uint8_t)(nz ? 1 : 0);
    }
 
+   if (f->c444)
+   {
+      rh264_cabac_p_plane444(cb, f, 0, mbx, mby, cbp_luma, cur, L, U,
+            have_left, have_up, t8);
+      rh264_cabac_p_plane444(cb, f, 1, mbx, mby, cbp_luma, cur, L, U,
+            have_left, have_up, t8);
+      return;
+   }
    for (comp = 0; comp < 2; comp++) for (k = 0; k < nblk; k++) cdc[comp][k] = 0;
    if (cbp_chroma)
    {
@@ -8296,7 +9349,8 @@ static int rh264_cabac_decode_pslice(rh264_bits *b, const rh264_sps *sps,
    bytepos = (b->bitpos + 7) >> 3;
    rh264_cabac_init_engine(cb, b->buf + bytepos, b->buf + b->size);
    cb->field = f->field;
-   cb->c422 = (f->cmbh == 16);
+   cb->c422 = (f->cmbh == 16 && !f->c444);
+   cb->c444 = f->c444;
    rh264_cabac_init_contexts(cb, sh->slice_qp, sh->cabac_init_idc);
    f->qp = sh->slice_qp;
    f->chroma_qp_offset = pps->chroma_qp_index_offset;
@@ -8402,9 +9456,7 @@ static int rh264_cabac_decode_pslice(rh264_bits *b, const rh264_sps *sps,
                f->nzL[(mby*4+cy)*gw + mbx*4+cx] = 0;
                absmvd[o] = 0; absmvd[o+1] = 0;
             }
-            for (cy = 0; cy < f->cmbh/4; cy++) for (cx = 0; cx < 2; cx++)
-            { f->nzC[0][(mby*(f->cmbh/4)+cy)*cgw + mbx*2+cx] = 0;
-              f->nzC[1][(mby*(f->cmbh/4)+cy)*cgw + mbx*2+cx] = 0; }
+            rh264_nzc_clear(f, mbx, mby);
             tmp.avail = 1;
             prevQpNZ = 0;
             f->mbqp[mby*mbw+mbx] = (uint8_t)f->qp;
@@ -8572,6 +9624,7 @@ static int rh264_cabac_decode_pslice(rh264_bits *b, const rh264_sps *sps,
                      cbp |= (1 << k);
                }
                cbp_luma = cbp;
+               if (!f->c444)   /* no chroma bins in 4:4:4 */
                {
                   int a  = (have_left && L->avail) ? (L->cbpChroma != 0) : 0;
                   int bb = (have_up   && U->avail) ? (U->cbpChroma != 0) : 0;
@@ -8753,7 +9806,8 @@ static int rh264_cabac_decode_bslice(rh264_bits *b, const rh264_sps *sps,
    bytepos = (b->bitpos + 7) >> 3;
    rh264_cabac_init_engine(cb, b->buf + bytepos, b->buf + b->size);
    cb->field = f->field;
-   cb->c422 = (f->cmbh == 16);
+   cb->c422 = (f->cmbh == 16 && !f->c444);
+   cb->c444 = f->c444;
    rh264_cabac_init_contexts(cb, sh->slice_qp, sh->cabac_init_idc);
    f->qp = sh->slice_qp;
    f->chroma_qp_offset = pps->chroma_qp_index_offset;
@@ -8851,9 +9905,7 @@ static int rh264_cabac_decode_bslice(rh264_bits *b, const rh264_sps *sps,
             { return -1; }
             for (cy = 0; cy < 4; cy++) for (cx = 0; cx < 4; cx++)
                f->nzL[(mby*4+cy)*gw + mbx*4+cx] = 0;
-            for (cy = 0; cy < f->cmbh/4; cy++) for (cx = 0; cx < 2; cx++)
-            { f->nzC[0][(mby*(f->cmbh/4)+cy)*cgw + mbx*2+cx] = 0;
-              f->nzC[1][(mby*(f->cmbh/4)+cy)*cgw + mbx*2+cx] = 0; }
+            rh264_nzc_clear(f, mbx, mby);
             rh264_inter_clear_i4mode(f, mbx, mby);
             tmp.avail = 1;
             prevQpNZ = 0;
@@ -9181,6 +10233,7 @@ static int rh264_cabac_decode_bslice(rh264_bits *b, const rh264_sps *sps,
                      cbp |= (1 << k);
                }
                cbp_luma = cbp;
+               if (!f->c444)   /* no chroma bins in 4:4:4 */
                {
                   int a  = (have_left && L->avail) ? (L->cbpChroma != 0) : 0;
                   int bb = (have_up   && U->avail) ? (U->cbpChroma != 0) : 0;
@@ -10313,12 +11366,12 @@ const uint8_t *rh264_video_plane(const rh264_video *v, int plane,
     * so the chroma origin divides exactly. */
    if (plane == 0)      { st = f->ysb;     w = f->w;         h = f->h;
                           p = f->Yb + (size_t)f->cropy * st + f->cropx; }
-   else                 { st = f->csb;     w = (f->w+1)/2;
+   else                 { st = f->csb;     w = f->c444 ? f->w : (f->w+1)/2;
                           h = (f->cmbh == 16) ? f->h : (f->h+1)/2;
                           p = ((plane == 1) ? f->Ub : f->Vb)
                             + (size_t)((f->cmbh == 16) ? f->cropy
                                                        : (f->cropy >> 1)) * st
-                            + (f->cropx >> 1); }
+                            + (f->c444 ? f->cropx : (f->cropx >> 1)); }
    if (stride) *stride = st;
    if (width)  *width  = w;
    if (height) *height = h;
