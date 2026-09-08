@@ -3526,7 +3526,7 @@ MSG_HASH(
    )
 MSG_HASH(
    MENU_ENUM_SUBLABEL_VIDEO_THREADED,
-   "Improves performance at the cost of latency and more video stuttering. Use only if full speed cannot be obtained otherwise."
+   "Improves performance at the cost of latency and more video stuttering. Use only if full speed cannot be obtained otherwise. Not used with cores that render on the GPU (hardware rendering), which run unthreaded whatever this is set to."
    )
 MSG_HASH(
    MENU_ENUM_LABEL_HELP_VIDEO_THREADED,

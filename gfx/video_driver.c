@@ -4867,10 +4867,25 @@ bool video_driver_init_internal(bool *video_is_threaded, bool verbosity_enabled)
    video.is_threaded                 = VIDEO_DRIVER_IS_THREADED_INTERNAL(video_st);
    *video_is_threaded                = video.is_threaded;
 
+   /* The setting is on but this session cannot honour it; say which
+    * veto applied, once, so the cfg bit is not mistaken for a live one.
+    * Hardware-rendered cores wait on a fenced present thread; the
+    * main-thread-only contexts (iOS GL) stay vetoed. */
+   if (video_st->threaded && !video.is_threaded)
+   {
+      if (video_driver_is_hw_context())
+         RARCH_WARN("[Video] Threaded video is enabled but this core renders "
+               "with SET_HW_RENDER, which the threaded driver does not support; "
+               "running unthreaded for this session.\n");
+      else if (video_driver_render_context_is_main_thread_only())
+         RARCH_WARN("[Video] Threaded video is enabled but this platform's "
+               "render context must stay on the main thread; running "
+               "unthreaded for this session.\n");
+   }
+
    if (video.is_threaded)
    {
       bool ret;
-      /* Can't do hardware rendering with threaded driver currently. */
       RARCH_LOG("[Video] Starting threaded video driver...\n");
 
       ret = video_init_thread(

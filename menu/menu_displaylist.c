@@ -10861,7 +10861,11 @@ unsigned menu_displaylist_build_list(
                      build_list[i].checked = video_vsync && frame_latency;
                      break;
                   case MENU_ENUM_LABEL_VIDEO_THREADED_PRESENT_REPEAT:
-                     build_list[i].checked = *video_driver_get_threaded();
+                     /* Only where threaded video is on and can be honoured:
+                      * a hardware-rendered core runs unthreaded whatever
+                      * the setting says. */
+                     build_list[i].checked = *video_driver_get_threaded()
+                        && !video_driver_is_hw_context();
                      break;
                   case MENU_ENUM_LABEL_VIDEO_MAX_FRAME_LATENCY:
                      build_list[i].checked = video_vsync && frame_latency && video_wait_swap;
