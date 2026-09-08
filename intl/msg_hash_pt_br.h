@@ -266,6 +266,7 @@ static const struct
    char s_d9a51d02[21];
    char s_12e77e8f[9];
    char s_98760b94[30];
+   char s_b81eb68d[22];
    char s_af6007a1[18];
    char s_da068369[12];
    char s_daead8a5[7];
@@ -2397,6 +2398,7 @@ static const struct
    char s_f7cc6630[30];
    char s_310ec7bd[75];
    char s_5832a2c2[118];
+   char s_6f6e337b[274];
    char s_f47e544f[244];
    char s_20cc6597[99];
    char s_21b0bad3[57];
@@ -4623,6 +4625,7 @@ static const struct
    "\303\215cone do aplicativo",
    "Recursos",
    "Abrir Painel de Controle ASIO",
+   "Canais de sa\303\255da ASIO",
    "Quadros por bloco",
    "Dispositivo",
    "\303\201udio",
@@ -6790,6 +6793,10 @@ static const struct
    "Os ativos do menu usados pelo RetroArch s\303\243o armazenados neste diret\303\263rio.",
    "Abra o painel de controle do driver ASIO para configurar o roteamento de dispositivos e as confi"
    "gura\303\247\303\265es de buffer.",
+   "Define as duas sa\303\255das do dispositivo de \303\241udio que o RetroArch usa para reprodu\303"
+   "\247\303\243o. Um dispositivo ASIO enumera suas sa\303\255das em pares numerados; em um disposit"
+   "ivo com mais de duas sa\303\255das, o primeiro par n\303\243o \303\251 necessariamente das suas "
+   "caixas de som ou fones de ouvido.",
    "Define a quantidade de quadros que o driver de \303\241udio percorre por bloco. \"0\" pergunta a"
    "o driver pelo valor do pr\303\263prio dispositivo, que \303\251 o que a maioria das configura"
    "\303\247\303\265es quer; um bloco maior troca lat\303\252ncia pela prote\303\247\303\243o contra"
@@ -9286,7 +9293,7 @@ static const struct
  * compiler that pads this struct fails here instead of
  * misindexing at runtime. */
 typedef char msg_hash_pt_br_blob_check[
-      (sizeof(msg_hash_pt_br_blob) == (195108u
+      (sizeof(msg_hash_pt_br_blob) == (195404u
 #ifdef ANDROID
        + 352u
 #endif
@@ -9958,6 +9965,7 @@ static const uint32_t msg_hash_pt_br_ids[] =
    (uint32_t)MENU_ENUM_LABEL_VALUE_APPICON_SETTINGS,
    (uint32_t)MENU_ENUM_LABEL_VALUE_ASSETS_DIRECTORY,
    (uint32_t)MENU_ENUM_LABEL_VALUE_AUDIO_ASIO_CONTROL_PANEL,
+   (uint32_t)MENU_ENUM_LABEL_VALUE_AUDIO_ASIO_OUTPUT_CHANNEL,
    (uint32_t)MENU_ENUM_LABEL_VALUE_AUDIO_BLOCK_FRAMES,
    (uint32_t)MENU_ENUM_LABEL_VALUE_AUDIO_DEVICE,
    (uint32_t)MENU_ENUM_LABEL_VALUE_AUDIO_DRIVER,
@@ -12088,6 +12096,7 @@ static const uint32_t msg_hash_pt_br_ids[] =
    (uint32_t)MENU_ENUM_SUBLABEL_APPICON_SETTINGS,
    (uint32_t)MENU_ENUM_SUBLABEL_ASSETS_DIRECTORY,
    (uint32_t)MENU_ENUM_SUBLABEL_AUDIO_ASIO_CONTROL_PANEL,
+   (uint32_t)MENU_ENUM_SUBLABEL_AUDIO_ASIO_OUTPUT_CHANNEL,
    (uint32_t)MENU_ENUM_SUBLABEL_AUDIO_BLOCK_FRAMES,
    (uint32_t)MENU_ENUM_SUBLABEL_AUDIO_DEVICE,
    (uint32_t)MENU_ENUM_SUBLABEL_AUDIO_DRIVER,

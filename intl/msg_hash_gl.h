@@ -3615,6 +3615,7 @@ static const struct
    char s_ec5751c3[26];
    char s_af4b70f4[41];
    char s_d9afe3b5[46];
+   char s_70ecb843[8];
    char s_312fd783[45];
    char s_96df643a[87];
    char s_150b4ebe[76];
@@ -8582,6 +8583,7 @@ static const struct
    "Este xogo non ten logros.",
    "Erro ao cargar o xogo de RetroLogros: %s",
    "RetroLogros: Non se puido identificar o xogo.",
+   "Extremo",
    "Modo Hardcore dos logros cambiado polo host.",
    "Cargouse un estado de gardado. Logros Modo Hardcore desactivado para a sesi\303\263n actual.",
    "Activouse un truco. Logros Modo Hardcore desactivado para a sesi\303\263n actual.",
@@ -9097,7 +9099,7 @@ static const struct
  * compiler that pads this struct fails here instead of
  * misindexing at runtime. */
 typedef char msg_hash_gl_blob_check[
-      (sizeof(msg_hash_gl_blob) == (194231u
+      (sizeof(msg_hash_gl_blob) == (194239u
 #ifdef ANDROID
        + 365u
 #endif
@@ -13089,6 +13091,7 @@ static const uint32_t msg_hash_gl_ids[] =
    (uint32_t)MSG_CHEEVOS_GAME_HAS_NO_ACHIEVEMENTS,
    (uint32_t)MSG_CHEEVOS_GAME_LOAD_FAILED,
    (uint32_t)MSG_CHEEVOS_GAME_NOT_IDENTIFIED,
+   (uint32_t)MSG_CHEEVOS_HARDCORE_MODE,
    (uint32_t)MSG_CHEEVOS_HARDCORE_MODE_CHANGED_BY_HOST,
    (uint32_t)MSG_CHEEVOS_HARDCORE_MODE_DISABLED,
    (uint32_t)MSG_CHEEVOS_HARDCORE_MODE_DISABLED_CHEAT,

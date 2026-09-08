@@ -3223,6 +3223,7 @@ static const struct
    char s_ec5751c3[49];
    char s_af4b70f4[71];
    char s_d9afe3b5[65];
+   char s_70ecb843[16];
    char s_96df643a[139];
    char s_150b4ebe[127];
    char s_0d212ca9[124];
@@ -12800,6 +12801,7 @@ static const struct
    "RetroAchievements: \343\202\262\343\203\274\343\203\240\343\202\222\347\211\271\345\256\232\343"
    "\201\247\343\201\215\343\201\276\343\201\233\343\202\223\343\201\247\343\201\227\343\201\237\343"
    "\200\202",
+   "\343\203\217\343\203\274\343\203\211\343\202\263\343\202\242",
    "\343\202\271\343\203\206\343\203\274\343\203\210\343\202\273\343\203\274\343\203\226\343\201\214"
    "\343\203\255\343\203\274\343\203\211\343\201\225\343\202\214\343\201\276\343\201\227\343\201\237"
    "\343\200\202\345\256\237\347\270\276\343\203\217\343\203\274\343\203\211\343\202\263\343\202\242"
@@ -13988,7 +13990,7 @@ static const struct
  * compiler that pads this struct fails here instead of
  * misindexing at runtime. */
 typedef char msg_hash_ja_blob_check[
-      (sizeof(msg_hash_ja_blob) == (201531u
+      (sizeof(msg_hash_ja_blob) == (201547u
 #ifdef ANDROID
        + 484u
 #endif
@@ -17534,6 +17536,7 @@ static const uint32_t msg_hash_ja_ids[] =
    (uint32_t)MSG_CHEEVOS_GAME_HAS_NO_ACHIEVEMENTS,
    (uint32_t)MSG_CHEEVOS_GAME_LOAD_FAILED,
    (uint32_t)MSG_CHEEVOS_GAME_NOT_IDENTIFIED,
+   (uint32_t)MSG_CHEEVOS_HARDCORE_MODE,
    (uint32_t)MSG_CHEEVOS_HARDCORE_MODE_DISABLED,
    (uint32_t)MSG_CHEEVOS_HARDCORE_MODE_DISABLED_CHEAT,
    (uint32_t)MSG_CHEEVOS_HARDCORE_MODE_ENABLE,

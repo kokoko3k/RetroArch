@@ -3679,6 +3679,7 @@ static const struct
    char s_ec5751c3[31];
    char s_af4b70f4[43];
    char s_d9afe3b5[49];
+   char s_70ecb843[7];
    char s_312fd783[44];
    char s_96df643a[105];
    char s_150b4ebe[96];
@@ -8803,6 +8804,7 @@ static const struct
    "Aquest joc no t\303\251 assoliments.",
    "Error en carregar el joc a Assoliments: %s",
    "RetroAchievements: No es pot identificar el joc.",
+   "Expert",
    "Assoliments Hardcore canviats pel servidor.",
    "S\342\200\231ha carregat un desat r\303\240pid. S\342\200\231ha desactivat el mode expert d\342"
    "\200\231assoliments per la sessi\303\263 actual.",
@@ -9337,7 +9339,7 @@ static const struct
  * compiler that pads this struct fails here instead of
  * misindexing at runtime. */
 typedef char msg_hash_ca_blob_check[
-      (sizeof(msg_hash_ca_blob) == (203543u
+      (sizeof(msg_hash_ca_blob) == (203550u
 #ifdef ANDROID
        + 281u
 #endif
@@ -13413,6 +13415,7 @@ static const uint32_t msg_hash_ca_ids[] =
    (uint32_t)MSG_CHEEVOS_GAME_HAS_NO_ACHIEVEMENTS,
    (uint32_t)MSG_CHEEVOS_GAME_LOAD_FAILED,
    (uint32_t)MSG_CHEEVOS_GAME_NOT_IDENTIFIED,
+   (uint32_t)MSG_CHEEVOS_HARDCORE_MODE,
    (uint32_t)MSG_CHEEVOS_HARDCORE_MODE_CHANGED_BY_HOST,
    (uint32_t)MSG_CHEEVOS_HARDCORE_MODE_DISABLED,
    (uint32_t)MSG_CHEEVOS_HARDCORE_MODE_DISABLED_CHEAT,

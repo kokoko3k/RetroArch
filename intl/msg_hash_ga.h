@@ -613,6 +613,7 @@ static const struct
    char s_12b8e195[21];
    char s_4bcbcc14[31];
    char s_e97bb565[17];
+   char s_47e8dc21[44];
    char s_da7a38eb[21];
 #ifdef _3DS
    char s_9db0c321[36];
@@ -2285,6 +2286,7 @@ static const struct
    char s_69b801ef[8];
    char s_a40653a7[21];
    char s_52e3d6ea[28];
+   char s_c992346c[27];
    char s_580e244f[9];
    char s_a9c8430e[25];
    char s_f5911f43[26];
@@ -2665,6 +2667,7 @@ static const struct
    char s_a68d6d11[61];
    char s_74022c02[96];
    char s_8abad013[90];
+   char s_0a53120f[460];
    char s_a39ca959[90];
    char s_16b9856e[33];
    char s_0ef5e125[31];
@@ -3574,6 +3577,7 @@ static const struct
    char s_7968f59d[40];
    char s_8cee3615[160];
    char s_58c80718[334];
+   char s_894ecb9a[411];
    char s_67d549fd[34];
    char s_afac733c[39];
    char s_3aaf6bf1[152];
@@ -3723,6 +3727,7 @@ static const struct
    char s_ec5751c3[36];
    char s_af4b70f4[47];
    char s_d9afe3b5[58];
+   char s_70ecb843[10];
    char s_312fd783[58];
    char s_96df643a[85];
    char s_150b4ebe[80];
@@ -3800,6 +3805,8 @@ static const struct
    char s_5eafa434[51];
    char s_7f1e25bf[49];
    char s_ed9e4f6f[210];
+   char s_ecbaddbe[67];
+   char s_c860f446[76];
    char s_30da3845[23];
    char s_d50c6bf1[42];
    char s_64a038aa[28];
@@ -5139,6 +5146,7 @@ static const struct
    "Athr\303\272 Athraithe CRT",
    "R\303\241ta Athnuachana Saincheaptha",
    "L\303\241r\303\272 Ingearach",
+   "Scr\303\255obh EDID le haghaidh R\303\251amhshocr\303\272 CRT",
    "L\303\241r\303\272 Cothrom\303\241nach",
 #ifdef _3DS
    "2T (\303\211ifeacht Eangach Picteil\303\255n\303\255)",
@@ -6837,6 +6845,7 @@ static const struct
    "Sc\303\241l\303\272",
    "Sioncr\303\263n\303\272 Scanline",
    "Insamhalta scanl\303\255ne rollta",
+   "Athr\303\272 M\303\263d Taispe\303\241na SDL",
    "F\303\255se\303\241n",
    "Sc\303\241thad\303\263ir\303\255 F\303\255se\303\241in",
    "Moill Uath-Sc\303\241th\303\272ch\303\241in",
@@ -7429,6 +7438,13 @@ static const struct
    " cumra\303\255ochta m\303\241s g\303\241.",
    "T\303\251igh tr\303\255 na roghanna seo mura bhfuil an \303\255omh\303\241 l\303\241rnaithe i gc"
    "eart ar an taispe\303\241int.",
+   "Scr\303\255obh bloc EDID ina nd\303\251antar cur s\303\255os ar an r\303\251amhshocr\303\272 CRT"
+   " roghnaithe chuig an eolaire cumra\303\255ochta. Nuair a luchta\303\255tear \303\251 mar EDID fi"
+   "rmware ar Linux (drm.edid_firmware) n\303\263 mar sh\303\241r\303\272 EDID ar Windows, ligeann s"
+   "\303\251 do thaispe\303\241ntas gan DDC a theorainneacha sioncr\303\263naithe a thuairisci\303"
+   "\272, ionas go dtosa\303\255onn an c\303\263ras ag r\303\241ta is f\303\251idir leis an CRT a th"
+   "aispe\303\241int. N\303\255l aon rud suite\303\241ilte; deir an log c\303\241 bhfuil an comhad a"
+   "gus conas \303\251 a \303\272s\303\241id.",
    "T\303\251igh tr\303\255 na roghanna seo mura bhfuil an \303\255omh\303\241 l\303\241rnaithe i gc"
    "eart ar an taispe\303\241int.",
    "F\303\251ach ar chuardaigh roimhe seo.",
@@ -9154,6 +9170,12 @@ static const struct
    "\303\255d an sc\303\241ile\303\241n a roinnt go hingearach agus gach cuid den sc\303\241ile\303"
    "\241n a rindre\303\241il de r\303\251ir l\303\255on na bhfo-fhr\303\241ma\303\255 at\303\241 ann"
    ".",
+   "Lig don fhuinneog SDL aistri\303\272 idir na modhanna taispe\303\241na at\303\241 liostaithe ann"
+   ". N\303\255 \303\272s\303\241ideann 'Auto' \303\251 ach amh\303\241in nuair nach f\303\251idir l"
+   "eis an bhfreastala\303\255 taispe\303\241na d\303\272chais modhanna a athr\303\272. S\303\241ra"
+   "\303\255onn 'I gc\303\263na\303\255' an freastala\303\255 d\303\272chais: ansin roghna\303\255on"
+   "n CRT SwitchRes \303\263 na modhanna at\303\241 liostaithe, lena n-\303\241ir\303\255tear cinn n"
+   "ach bhfuil amanna ar eolas acu, agus n\303\255l amanna CRT saincheaptha ar f\303\241il.",
    "Athraigh socruithe aschuir f\303\255se.",
    "Cumasaigh p\303\255bl\303\255ne sc\303\241thaithe f\303\255se.",
    "Moill ar sc\303\241thaitheoir\303\255 uathluchtaithe (i ms). Is f\303\251idir leo dul timpeall a"
@@ -9396,6 +9418,7 @@ static const struct
    "N\303\255l aon \303\251achta\303\255 sa chluiche seo.",
    "Theip ar lucht\303\272 cluiche RetroAchievements: %s",
    "RetroAchievements: N\303\255orbh fh\303\251idir an cluiche a aithint.",
+   "M\303\263d Crua",
    "Athra\303\255odh M\303\263d Crua na nGn\303\263thacht\303\241lacha ag an \303\263stach.",
    "Luchta\303\255odh staid s\303\241bh\303\241la. M\303\263d Crua-\303\211achta\303\255 d\303\255ch"
    "umasaithe don seisi\303\272n reatha.",
@@ -9492,6 +9515,9 @@ static const struct
    "Neamhoiri\303\272nacht suime seice\303\241la CRC32 idir an comhad \303\241bhair agus suim seice"
    "\303\241la an \303\241bhair sh\303\241bh\303\241ilte i gceannt\303\241sc an chomhaid athsheinm. "
    "Is d\303\263cha go nd\303\255shioncr\303\263n\303\263idh an t-athsheinm le linn athsheinm.",
+   "N\303\255orbh fh\303\251idir EDID a scr\303\255obh don r\303\251amhshocr\303\272 CRT roghnaithe.",
+   "Scr\303\255obhadh EDID chuig %s. F\303\251ach ar an log le haghaidh conas \303\251 a lucht\303"
+   "\272.",
    "Am saincheaptha tugtha",
    "T\303\241 d\303\255-chomhbhr\303\272 ar si\303\272l cheana f\303\251in.",
    "Theip ar an d\303\255-chomhbhr\303\272.",
@@ -9949,7 +9975,7 @@ static const struct
  * compiler that pads this struct fails here instead of
  * misindexing at runtime. */
 typedef char msg_hash_ga_blob_check[
-      (sizeof(msg_hash_ga_blob) == (207573u
+      (sizeof(msg_hash_ga_blob) == (208668u
 #ifdef ANDROID
        + 390u
 #endif
@@ -10960,6 +10986,7 @@ static const uint32_t msg_hash_ga_ids[] =
    (uint32_t)MENU_ENUM_LABEL_VALUE_CRT_SWITCH_RESOLUTION,
    (uint32_t)MENU_ENUM_LABEL_VALUE_CRT_SWITCH_RESOLUTION_USE_CUSTOM_REFRESH_RATE,
    (uint32_t)MENU_ENUM_LABEL_VALUE_CRT_SWITCH_VERTICAL_ADJUST,
+   (uint32_t)MENU_ENUM_LABEL_VALUE_CRT_SWITCH_WRITE_EDID,
    (uint32_t)MENU_ENUM_LABEL_VALUE_CRT_SWITCH_X_AXIS_CENTERING,
 #ifdef _3DS
    (uint32_t)MENU_ENUM_LABEL_VALUE_CTR_VIDEO_MODE_2D_400X240,
@@ -12631,6 +12658,7 @@ static const uint32_t msg_hash_ga_ids[] =
    (uint32_t)MENU_ENUM_LABEL_VALUE_VIDEO_SCALING_SETTINGS,
    (uint32_t)MENU_ENUM_LABEL_VALUE_VIDEO_SCANLINE_SYNC,
    (uint32_t)MENU_ENUM_LABEL_VALUE_VIDEO_SCAN_SUBFRAMES,
+   (uint32_t)MENU_ENUM_LABEL_VALUE_VIDEO_SDL_DISPLAY_SERVER,
    (uint32_t)MENU_ENUM_LABEL_VALUE_VIDEO_SETTINGS,
    (uint32_t)MENU_ENUM_LABEL_VALUE_VIDEO_SHADERS_ENABLE,
    (uint32_t)MENU_ENUM_LABEL_VALUE_VIDEO_SHADER_DELAY,
@@ -13008,6 +13036,7 @@ static const uint32_t msg_hash_ga_ids[] =
    (uint32_t)MENU_ENUM_SUBLABEL_CRT_SWITCH_RESOLUTION_SUPER,
    (uint32_t)MENU_ENUM_SUBLABEL_CRT_SWITCH_RESOLUTION_USE_CUSTOM_REFRESH_RATE,
    (uint32_t)MENU_ENUM_SUBLABEL_CRT_SWITCH_VERTICAL_ADJUST,
+   (uint32_t)MENU_ENUM_SUBLABEL_CRT_SWITCH_WRITE_EDID,
    (uint32_t)MENU_ENUM_SUBLABEL_CRT_SWITCH_X_AXIS_CENTERING,
    (uint32_t)MENU_ENUM_SUBLABEL_CURSOR_MANAGER,
    (uint32_t)MENU_ENUM_SUBLABEL_DATABASE_MANAGER,
@@ -13916,6 +13945,7 @@ static const uint32_t msg_hash_ga_ids[] =
    (uint32_t)MENU_ENUM_SUBLABEL_VIDEO_SCALING_SETTINGS,
    (uint32_t)MENU_ENUM_SUBLABEL_VIDEO_SCANLINE_SYNC,
    (uint32_t)MENU_ENUM_SUBLABEL_VIDEO_SCAN_SUBFRAMES,
+   (uint32_t)MENU_ENUM_SUBLABEL_VIDEO_SDL_DISPLAY_SERVER,
    (uint32_t)MENU_ENUM_SUBLABEL_VIDEO_SETTINGS,
    (uint32_t)MENU_ENUM_SUBLABEL_VIDEO_SHADERS_ENABLE,
    (uint32_t)MENU_ENUM_SUBLABEL_VIDEO_SHADER_DELAY,
@@ -14065,6 +14095,7 @@ static const uint32_t msg_hash_ga_ids[] =
    (uint32_t)MSG_CHEEVOS_GAME_HAS_NO_ACHIEVEMENTS,
    (uint32_t)MSG_CHEEVOS_GAME_LOAD_FAILED,
    (uint32_t)MSG_CHEEVOS_GAME_NOT_IDENTIFIED,
+   (uint32_t)MSG_CHEEVOS_HARDCORE_MODE,
    (uint32_t)MSG_CHEEVOS_HARDCORE_MODE_CHANGED_BY_HOST,
    (uint32_t)MSG_CHEEVOS_HARDCORE_MODE_DISABLED,
    (uint32_t)MSG_CHEEVOS_HARDCORE_MODE_DISABLED_CHEAT,
@@ -14142,6 +14173,8 @@ static const uint32_t msg_hash_ga_ids[] =
    (uint32_t)MSG_COULD_NOT_READ_MOVIE_HEADER,
    (uint32_t)MSG_COULD_NOT_READ_STATE_FROM_MOVIE,
    (uint32_t)MSG_CRC32_CHECKSUM_MISMATCH,
+   (uint32_t)MSG_CRT_SWITCH_EDID_FAILED,
+   (uint32_t)MSG_CRT_SWITCH_EDID_WRITTEN,
    (uint32_t)MSG_CUSTOM_TIMING_GIVEN,
    (uint32_t)MSG_DECOMPRESSION_ALREADY_IN_PROGRESS,
    (uint32_t)MSG_DECOMPRESSION_FAILED,

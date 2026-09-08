@@ -2082,6 +2082,7 @@ static const struct
    char s_5e0b473a[22];
    char s_6a708aa4[42];
    char s_08abd26f[33];
+   char s_70ecb843[22];
    char s_96df643a[121];
    char s_150b4ebe[115];
    char s_0d212ca9[122];
@@ -7262,6 +7263,7 @@ static const struct
    "\247\331\204\330\254\330\257\331\212\330\257 = %u",
    "\330\247\331\204\330\252\330\255\331\202\331\202 \331\205\331\206 \330\247\331\204\331\206\331"
    "\210\330\247\330\251: ",
+   "\330\247\331\204\331\210\330\266\330\271 \330\247\331\204\330\265\330\271\330\250",
    "\330\252\331\205 \330\252\330\255\331\205\331\212\331\204 \330\255\330\247\331\204\330\251 \330"
    "\247\331\204\330\255\331\201\330\270. \330\252\331\205 \330\252\330\271\330\267\331\212\331\204 "
    "\331\210\330\266\330\271 \330\247\331\204\331\207\330\261\331\206\330\254 \331\204\331\204\330"
@@ -7933,7 +7935,7 @@ static const struct
  * compiler that pads this struct fails here instead of
  * misindexing at runtime. */
 typedef char msg_hash_ar_blob_check[
-      (sizeof(msg_hash_ar_blob) == (107757u
+      (sizeof(msg_hash_ar_blob) == (107779u
 #ifdef HAVE_LAKKA
        + 287u
 #endif
@@ -10211,6 +10213,7 @@ static const uint32_t msg_hash_ar_ids[] =
    (uint32_t)MSG_CHEAT_DELETE_SUCCESS,
    (uint32_t)MSG_CHEAT_SEARCH_FOUND_MATCHES,
    (uint32_t)MSG_CHECKING_CORE,
+   (uint32_t)MSG_CHEEVOS_HARDCORE_MODE,
    (uint32_t)MSG_CHEEVOS_HARDCORE_MODE_DISABLED,
    (uint32_t)MSG_CHEEVOS_HARDCORE_MODE_DISABLED_CHEAT,
    (uint32_t)MSG_CHEEVOS_HARDCORE_MODE_ENABLE,

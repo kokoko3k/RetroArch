@@ -1243,6 +1243,7 @@ static const struct
    char s_825152dd[48];
    char s_531b0e75[21];
    char s_08abd26f[30];
+   char s_70ecb843[29];
    char s_f7e279a6[29];
    char s_89aa2160[24];
    char s_76c4c7ce[51];
@@ -4437,6 +4438,8 @@ static const struct
    "\316\231\316\272\316\261\316\275\317\214\317\204\316\267\317\204\316\265\317\202",
    "\316\210\316\273\316\265\316\263\317\207\316\277\317\202 \317\200\317\205\317\201\316\256\316"
    "\275\316\261: ",
+   "\316\243\316\272\316\273\316\267\317\201\316\277\317\200\317\205\317\201\316\267\316\275\316\271"
+   "\316\272\317\214",
    "\316\234\316\265\317\204\316\261\316\263\316\273\317\211\317\204\317\204\316\271\317\203\317\204"
    "\316\256\317\202",
    "\316\243\317\205\316\275\316\264\316\255\316\270\316\267\316\272\316\265 \316\274\316\265",
@@ -4754,7 +4757,7 @@ static const struct
  * compiler that pads this struct fails here instead of
  * misindexing at runtime. */
 typedef char msg_hash_el_blob_check[
-      (sizeof(msg_hash_el_blob) == (69048u
+      (sizeof(msg_hash_el_blob) == (69077u
 #ifdef HAVE_LAKKA
        + 35u
 #endif
@@ -6084,6 +6087,7 @@ static const uint32_t msg_hash_el_ids[] =
    (uint32_t)MSG_BLUETOOTH_SCAN_COMPLETE,
    (uint32_t)MSG_CAPABILITIES,
    (uint32_t)MSG_CHECKING_CORE,
+   (uint32_t)MSG_CHEEVOS_HARDCORE_MODE,
    (uint32_t)MSG_COMPILER,
    (uint32_t)MSG_CONNECTED_TO,
    (uint32_t)MSG_CONNECTING_TO_NETPLAY_HOST,

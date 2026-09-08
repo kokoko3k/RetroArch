@@ -3431,6 +3431,7 @@ static const struct
    char s_ec5751c3[40];
    char s_af4b70f4[51];
    char s_d9afe3b5[41];
+   char s_70ecb843[12];
    char s_312fd783[59];
    char s_96df643a[98];
    char s_150b4ebe[97];
@@ -8626,6 +8627,7 @@ static const struct
    "Bu oyunun herhangi bir ba\305\237ar\304\261m\304\261 yok.",
    "RetroAchievements oyun y\303\274klemesi ba\305\237ar\304\261s\304\261z: %s",
    "RetroAchievements: Oyun tan\304\261mlanamad\304\261.",
+   "Zorlay\304\261c\304\261",
    "Ba\305\237ar\304\261mlar Zorlu Mod, sunucu taraf\304\261ndan de\304\237i\305\237tirildi.",
    "Bir durum kayd\304\261 y\303\274klendi. Ba\305\237ar\304\261lar mevcut oturum i\303\247in Zorlu "
    "Kip devre d\304\261\305\237\304\261 b\304\261rak\304\261ld\304\261.",
@@ -9181,7 +9183,7 @@ static const struct
  * compiler that pads this struct fails here instead of
  * misindexing at runtime. */
 typedef char msg_hash_tr_blob_check[
-      (sizeof(msg_hash_tr_blob) == (171044u
+      (sizeof(msg_hash_tr_blob) == (171056u
 #ifdef ANDROID
        + 340u
 #endif
@@ -12970,6 +12972,7 @@ static const uint32_t msg_hash_tr_ids[] =
    (uint32_t)MSG_CHEEVOS_GAME_HAS_NO_ACHIEVEMENTS,
    (uint32_t)MSG_CHEEVOS_GAME_LOAD_FAILED,
    (uint32_t)MSG_CHEEVOS_GAME_NOT_IDENTIFIED,
+   (uint32_t)MSG_CHEEVOS_HARDCORE_MODE,
    (uint32_t)MSG_CHEEVOS_HARDCORE_MODE_CHANGED_BY_HOST,
    (uint32_t)MSG_CHEEVOS_HARDCORE_MODE_DISABLED,
    (uint32_t)MSG_CHEEVOS_HARDCORE_MODE_DISABLED_CHEAT,

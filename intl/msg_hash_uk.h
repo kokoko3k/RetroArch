@@ -3774,6 +3774,7 @@ static const struct
    char s_ec5751c3[48];
    char s_af4b70f4[73];
    char s_d9afe3b5[92];
+   char s_70ecb843[15];
    char s_312fd783[82];
    char s_96df643a[173];
    char s_150b4ebe[160];
@@ -18502,6 +18503,7 @@ static const struct
    "\320\275\320\275\321\217: \320\263\321\200\320\260 \320\275\320\265 \320\274\320\276\320\266\320"
    "\265 \320\261\321\203\321\202\320\270 \321\226\320\264\320\265\320\275\321\202\320\270\321\204"
    "\321\226\320\272\320\276\320\262\320\260\320\275\320\260.",
+   "\320\245\320\260\321\200\320\264\320\272\320\276\321\200",
    "\320\224\320\276\321\201\321\217\320\263\320\275\320\265\320\275\320\275\321\217 \321\201\320"
    "\272\320\273\320\260\320\264\320\275\320\276\320\263\320\276 \321\200\320\265\320\266\320\270"
    "\320\274\321\203 \320\267\320\274\321\226\320\275\320\265\320\275\320\276 \321\205\320\276\321"
@@ -19950,7 +19952,7 @@ static const struct
  * compiler that pads this struct fails here instead of
  * misindexing at runtime. */
 typedef char msg_hash_uk_blob_check[
-      (sizeof(msg_hash_uk_blob) == (325156u
+      (sizeof(msg_hash_uk_blob) == (325171u
 #ifdef ANDROID
        + 610u
 #endif
@@ -24063,6 +24065,7 @@ static const uint32_t msg_hash_uk_ids[] =
    (uint32_t)MSG_CHEEVOS_GAME_HAS_NO_ACHIEVEMENTS,
    (uint32_t)MSG_CHEEVOS_GAME_LOAD_FAILED,
    (uint32_t)MSG_CHEEVOS_GAME_NOT_IDENTIFIED,
+   (uint32_t)MSG_CHEEVOS_HARDCORE_MODE,
    (uint32_t)MSG_CHEEVOS_HARDCORE_MODE_CHANGED_BY_HOST,
    (uint32_t)MSG_CHEEVOS_HARDCORE_MODE_DISABLED,
    (uint32_t)MSG_CHEEVOS_HARDCORE_MODE_DISABLED_CHEAT,

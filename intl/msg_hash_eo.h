@@ -3684,6 +3684,7 @@ static const struct
    char s_ec5751c3[36];
    char s_af4b70f4[49];
    char s_d9afe3b5[44];
+   char s_70ecb843[12];
    char s_312fd783[55];
    char s_96df643a[100];
    char s_150b4ebe[95];
@@ -8557,6 +8558,7 @@ static const struct
    "\304\210i tiu ludo havas neniujn akirojn.",
    "Luda \305\235argo de RetroAchievements malsukcesis: %s",
    "RetroAchievements: Ne povis identigi ludon.",
+   "Malfacilega",
    "Malfacilega re\304\235imo de akiroj \305\235an\304\235ita de gastiganto.",
    "Konservostato estis \305\235argita. Malfacilega re\304\235imo de akiroj estis malebligita por la"
    " kuranta sesio.",
@@ -9062,7 +9064,7 @@ static const struct
  * compiler that pads this struct fails here instead of
  * misindexing at runtime. */
 typedef char msg_hash_eo_blob_check[
-      (sizeof(msg_hash_eo_blob) == (172851u
+      (sizeof(msg_hash_eo_blob) == (172863u
 #ifdef ANDROID
        + 312u
 #endif
@@ -13135,6 +13137,7 @@ static const uint32_t msg_hash_eo_ids[] =
    (uint32_t)MSG_CHEEVOS_GAME_HAS_NO_ACHIEVEMENTS,
    (uint32_t)MSG_CHEEVOS_GAME_LOAD_FAILED,
    (uint32_t)MSG_CHEEVOS_GAME_NOT_IDENTIFIED,
+   (uint32_t)MSG_CHEEVOS_HARDCORE_MODE,
    (uint32_t)MSG_CHEEVOS_HARDCORE_MODE_CHANGED_BY_HOST,
    (uint32_t)MSG_CHEEVOS_HARDCORE_MODE_DISABLED,
    (uint32_t)MSG_CHEEVOS_HARDCORE_MODE_DISABLED_CHEAT,
