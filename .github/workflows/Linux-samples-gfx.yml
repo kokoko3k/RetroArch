@@ -19,7 +19,12 @@ jobs:
   samples-gfx:
     name: Build and run samples/gfx
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The gfx_thumbnail_preview step alone is ~5 min: two sanitizer
+    # builds, the video harness under each, and the windowed-animation
+    # harness under ASan over ~70 MB of lossless frames.  20 was cut
+    # too close once the animation harness joined; the run was
+    # cancelled mid-TSan pass.
+    timeout-minutes: 30
 
     steps:
       - name: Install dependencies
@@ -697,6 +702,12 @@ jobs:
           # of these faults turned on.  The multi-gigabyte ones are
           # sparse: two 7.28 GB files cost ~400 KB of disk.
           #
+          # The windowed-animation harness below decodes its two
+          # lossless fixtures three times each; they are sized just past
+          # what the feeder may keep resident (~40 MB and ~30 MB), and
+          # mkfixtures.py reuses an existing set, so the second
+          # "make fixtures" (TSan pass) costs nothing.  ~55 s under
+          # ASan on one core.
           # Frame counts are set from measurement, not taste.  At 300
           # ASan / 200 TSan frames this step took ~5.6 min on one
           # core, against a job budget shared with a dozen others;

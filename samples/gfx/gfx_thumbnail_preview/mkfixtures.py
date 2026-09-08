@@ -250,13 +250,28 @@ def main():
     j = lambda n: os.path.join(out, n)
     BIG = 7817178301          # the size that started all of this
 
-    # Frame-indexed animations for the windowed open: ~60 MB of
-    # lossless 720p frames each, one with a frame larger than the
-    # feeder's lookahead, plus a still WebP the probe must reject
-    # from its first chunk.
-    anim_webp(j('anim_lossless.webp'), 20, 1280, 720, 10)
-    anim_webp_big_frame(j('anim_lossless.webp'), j('anim_bigframe.webp'),
-                        12 * 1024 * 1024)
+    # The workflow rebuilds the fixtures before each sanitizer pass so
+    # a clean cannot leave the run globbing nothing; the outputs are
+    # deterministic, so an existing set is reused rather than encoded
+    # again (the lossless animations are the expensive part).
+    if all(os.path.exists(j(n)) for n in ('anim_lossless.webp',
+            'still_lossless.webp', 'anim_lossless.png',
+            'anim_dispose_prev.png', 'trailing_large.mp4',
+            'trailing_huge.mp4', 'leading_huge.mp4', 'trailing_small.mp4')):
+        print('fixtures present, not rebuilt')
+        return
+
+    # Frame-indexed animations for the windowed open, each just past
+    # what the feeder may keep resident (head + lookahead + margin +
+    # two huge pages, ~27 MB): lossless 720p frames, the WebP with a
+    # second frame padded past the feeder's lookahead, plus a still
+    # WebP the probe must reject from its first chunk.  Kept as small
+    # as the checks allow - every byte is decoded three times under
+    # the sanitizers.
+    anim_webp(j('anim_lossless_base.webp'), 17, 1280, 720, 10)
+    anim_webp_big_frame(j('anim_lossless_base.webp'),
+                        j('anim_lossless.webp'), 12 * 1024 * 1024)
+    os.unlink(j('anim_lossless_base.webp'))
     still_webp(j('still_lossless.webp'), 1920, 1080)
     apng(j('anim_lossless.png'), 30, 1280, 720, 10)
     apng_dispose_previous(j('anim_dispose_prev.png'))

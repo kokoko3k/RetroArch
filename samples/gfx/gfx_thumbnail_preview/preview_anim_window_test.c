@@ -468,9 +468,7 @@ int main(int argc, char **argv)
    {
       char path[1024];
       snprintf(path, sizeof(path), "%s/anim_lossless.webp", argv[i]);
-      run_anim(path, "anim_lossless.webp", 0);
-      snprintf(path, sizeof(path), "%s/anim_bigframe.webp", argv[i]);
-      run_anim(path, "anim_bigframe.webp (frame > lookahead)", 1);
+      run_anim(path, "anim_lossless.webp (one frame > lookahead)", 1);
       snprintf(path, sizeof(path), "%s/anim_lossless.png", argv[i]);
       run_anim(path, "anim_lossless.png (APNG)", 0);
       snprintf(path, sizeof(path), "%s/anim_dispose_prev.png", argv[i]);
