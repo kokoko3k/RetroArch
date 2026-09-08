@@ -933,6 +933,10 @@ static bool video_thread_init(thread_video_t *thr,
    thr->info                 = info;
    thr->alive                = true;
    thr->focus                = true;
+   /* Same default the video thread applies when the context has no
+    * answer, so the runloop is not told there is nothing to present to
+    * during the frames before the first one completes. */
+   thr->presentable          = true;
    thr->has_windowed         = true;
    thr->suppress_screensaver = true;
    thr->last_time            = cpu_features_get_time_usec();
@@ -1806,10 +1810,22 @@ bool video_thread_presentable(void)
 {
    bool ret;
    thread_video_t *thr;
-   if (!video_driver_thread_wrapper_active())
+   video_driver_state_t *video_st = video_state_get_ptr();
+
+   /* video_st->data is the thread_video_t only while the wrapper is
+    * installed. It is taken raw here: video_driver_get_ptr() unwraps
+    * the wrapper and hands back the concrete driver's private data,
+    * which is not a thread_video_t and has no lock at that offset. */
+   if (!video_st->thread_wrapper_active)
       return true;
-   if (!(thr = (thread_video_t*)video_driver_get_ptr()))
+   if (!(thr = (thread_video_t*)video_st->data) || !thr->thread)
       return true;
+
+   /* The video thread publishes this value under thr->lock at the end
+    * of each frame; it reads its own context directly. */
+   if (sthread_get_thread_id(thr->thread) == sthread_get_current_thread_id())
+      return video_context_driver_presentable_direct();
+
    slock_lock(thr->lock);
    ret = thr->presentable;
    slock_unlock(thr->lock);
