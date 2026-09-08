@@ -28,7 +28,9 @@ jobs:
           # All three packages ship on the stock ubuntu-latest image, so
           # this step is a no-op there and apt is only contacted if the
           # image ever drops one of them.
-          if dpkg -s build-essential zlib1g-dev clang >/dev/null 2>&1; then
+          # ffmpeg (with libx264): formats/h264/rh264_lossless_test builds
+          # its lossless corpus and its reference decodes with it.
+          if dpkg -s build-essential zlib1g-dev clang ffmpeg >/dev/null 2>&1; then
             echo "All packages already present on runner image; skipping apt."
             exit 0
           fi
@@ -40,7 +42,7 @@ jobs:
           done
           sudo apt-get install -y \
             -o Acquire::Retries=3 -o Acquire::http::Timeout=30 \
-            build-essential zlib1g-dev clang
+            build-essential zlib1g-dev clang ffmpeg
 
       - name: Checkout
         uses: actions/checkout@v3
@@ -86,6 +88,7 @@ jobs:
             data_transfer_window_test
             audio_transfer_window_test
             rjpeg_test
+            rh264_lossless_test
             r7z_lzma_props_test
             vcdiff_test
             net_ifinfo
