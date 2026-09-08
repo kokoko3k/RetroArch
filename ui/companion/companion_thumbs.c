@@ -148,6 +148,29 @@ struct companion_thumbs
    gfx_anim_preview_t *anim_sess;
    unsigned anim_sess_gen;
    unsigned anim_audio_gen;
+#ifdef HAVE_THREADS
+   /* One hover on a video is a request() for its still and an
+    * animate() for the same path, back to back, on every backend.
+    * The still is the first frame through a preview session; the
+    * animation used to open a second session and decode that same
+    * frame again, concurrently - two windows, two decoders (a 4K
+    * H.264 DPB each), two I-frame decodes for one picture.  Instead
+    * the worker that decoded the still PARKS its session here when
+    * the animation wants that path, and the animation thread takes it
+    * and carries on from the second frame; while the still is queued
+    * or in flight the animation thread waits for it rather than
+    * racing it.  Lock held for every field.  video_inflight: e->path
+    * of a video still each worker is decoding right now (the entry is
+    * held by the job until the result is parked). */
+   struct
+   {
+      gfx_anim_preview_t *sess;
+      char *path;
+   } parked;
+   const char *video_inflight[4];
+   bool anim_opening;      /* the animation thread is between taking a
+                              request and holding a session for it */
+#endif
 };
 
 #ifdef HAVE_THREADS
@@ -288,8 +311,8 @@ uint32_t *companion_thumbs_scale(const uint32_t *src, unsigned sw,
 /* A video's still is its first frame, taken through the same windowed
  * open the menu uses: image_texture_load would read the whole file
  * (a two-hour recording) to show one frame; this reads the head. */
-static uint32_t *ct_decode_video_still(const char *path, int w, int h,
-      uint32_t bg)
+static uint32_t *ct_decode_video_still(companion_thumbs_t *t,
+      const char *path, int w, int h, uint32_t bg)
 {
    gfx_anim_preview_t *sess = gfx_anim_preview_open(path, -1);
    const uint32_t *frame;
@@ -307,22 +330,49 @@ static uint32_t *ct_decode_video_still(const char *path, int w, int h,
    }
    bits = companion_thumbs_scale_ex(frame, sess->width, sess->height,
          w, h, bg, !native_argb);
-   gfx_anim_preview_close(sess);
+#ifdef HAVE_THREADS
+   /* The animation for this path continues from this session (its
+    * next frame is the second one) instead of opening its own and
+    * decoding this frame again.  Only when it is wanted: a session
+    * nobody takes would sit on its window until the next park. */
+   if (t && t->lock)
+   {
+      slock_lock(t->lock);
+      if (   !t->quit
+          && t->anim.path && !strcmp(t->anim.path, path)
+          && (t->anim.wanted || t->anim_opening))
+      {
+         if (t->parked.sess)
+            gfx_anim_preview_close(t->parked.sess);
+         free(t->parked.path);
+         t->parked.sess = sess;
+         t->parked.path = strldup(path, strlen(path) + 1);
+         sess           = NULL;
+         if (t->anim_cond)
+            scond_broadcast(t->anim_cond);
+      }
+      slock_unlock(t->lock);
+   }
+#else
+   (void)t;
+#endif
+   if (sess)
+      gfx_anim_preview_close(sess);
    return bits;
 }
 
 /* Decode @path and scale to @w x @h. Runs on a worker; @should_abort
  * (may be NULL) is asked between decode steps so a giant image can be
  * abandoned at shutdown or once nobody wants it. */
-static uint32_t *ct_decode(const char *path, int w, int h, uint32_t bg,
-      bool (*should_abort)(void *ud), void *ud)
+static uint32_t *ct_decode(companion_thumbs_t *t, const char *path,
+      int w, int h, uint32_t bg, bool (*should_abort)(void *ud), void *ud)
 {
    struct texture_image img;
    uint32_t *bits = NULL;
    {
       enum image_type_enum type = image_texture_get_type(path);
       if (type == IMAGE_TYPE_WEBM || type == IMAGE_TYPE_MP4)
-         return ct_decode_video_still(path, w, h, bg);
+         return ct_decode_video_still(t, path, w, h, bg);
    }
    memset(&img, 0, sizeof(img));
    if (image_texture_load_ex(&img, path, should_abort, ud))
@@ -609,6 +659,45 @@ static bool ct_should_abort(void *ud)
    return stop;
 }
 
+/* Publish that this worker is decoding a video still for @path; -1
+ * when @path is not a video (nothing for the animation to wait on) or
+ * no slot is free (then the animation thread opens its own, as before).
+ * Lock taken here. */
+static int ct_video_inflight_claim(companion_thumbs_t *t, const char *path)
+{
+   enum image_type_enum type = image_texture_get_type(path);
+   int slot = -1, i;
+   if (type != IMAGE_TYPE_WEBM && type != IMAGE_TYPE_MP4)
+      return -1;
+   slock_lock(t->lock);
+   for (i = 0; i < (int)(sizeof(t->video_inflight) / sizeof(t->video_inflight[0])); i++)
+      if (!t->video_inflight[i])
+      {
+         t->video_inflight[i] = path;
+         slot = i;
+         break;
+      }
+   slock_unlock(t->lock);
+   return slot;
+}
+
+/* Is a still of @path (a video) queued or being decoded?  Lock held. */
+static bool ct_video_still_pending(companion_thumbs_t *t, const char *path)
+{
+   size_t k;
+   int i;
+   for (i = 0; i < (int)(sizeof(t->video_inflight) / sizeof(t->video_inflight[0])); i++)
+      if (t->video_inflight[i] && !strcmp(t->video_inflight[i], path))
+         return true;
+   for (k = 0; k < t->urgent.len; k++)
+      if (!strcmp(t->urgent.v[(t->urgent.head + k) % t->urgent.cap].e->path, path))
+         return true;
+   for (k = 0; k < t->prefetch.len; k++)
+      if (!strcmp(t->prefetch.v[(t->prefetch.head + k) % t->prefetch.cap].e->path, path))
+         return true;
+   return false;
+}
+
 static void ct_worker(void *ud)
 {
    companion_thumbs_t *t = (companion_thumbs_t*)ud;
@@ -618,6 +707,7 @@ static void ct_worker(void *ud)
       struct ct_abort_ctx actx;
       uint32_t *bits;
       bool aborted;
+      int slot;
       slock_lock(t->lock);
       /* Timed wait: a lost wake-up can never keep a worker parked past
        * quit, so shutdown cannot hang on the join. */
@@ -637,12 +727,19 @@ static void ct_worker(void *ud)
 
       actx.t     = t;
       actx.epoch = job.epoch;
-      bits       = ct_decode(job.e->path, job.e->w, job.e->h, job.bg,
+      slot       = ct_video_inflight_claim(t, job.e->path);
+      bits       = ct_decode(t, job.e->path, job.e->w, job.e->h, job.bg,
             ct_should_abort, &actx);
 
       slock_lock(t->lock);
+      if (slot >= 0)
+         t->video_inflight[slot] = NULL;
       aborted = !bits && (t->quit || t->epoch != job.epoch);
       ct_push_done(t, &job, bits);
+      /* A waiting animation thread re-checks: its still landed (parked
+       * or not), or the decode failed and it opens its own. */
+      if (slot >= 0 && t->anim_cond)
+         scond_broadcast(t->anim_cond);
       if (aborted && t->done_len)
          t->done[t->done_len - 1].aborted = true;
       slock_unlock(t->lock);
@@ -719,17 +816,59 @@ static void ct_anim_thread(void *ud)
       bg  = t->anim.bg;
       gen = t->anim.gen;
       t->anim.wanted = false;
+      sess           = NULL;
+      if (path[0])
+      {
+         /* A video's still is on its way through a worker (or already
+          * parked): take that session rather than open a second one
+          * and decode the same first frame in parallel with it.  Wait
+          * only while the still is genuinely queued or in flight; a
+          * failed or aborted decode parks nothing and the wait ends
+          * with the job. */
+         enum image_type_enum type = image_texture_get_type(path);
+         t->anim_opening = true;
+         if (type == IMAGE_TYPE_WEBM || type == IMAGE_TYPE_MP4)
+         {
+            for (;;)
+            {
+               if (t->parked.sess && t->parked.path
+                     && !strcmp(t->parked.path, path))
+               {
+                  sess = t->parked.sess;
+                  free(t->parked.path);
+                  t->parked.sess = NULL;
+                  t->parked.path = NULL;
+                  break;
+               }
+               if (t->quit || t->anim.gen != gen
+                     || !ct_video_still_pending(t, path))
+                  break;
+               scond_wait_timeout(t->anim_cond, t->lock, 100000);
+            }
+         }
+      }
       slock_unlock(t->lock);
 
       if (!path[0])
+      {
+         slock_lock(t->lock);
+         t->anim_opening = false;
+         slock_unlock(t->lock);
          continue;
+      }
       /* -1: no still-decode verdict to offer; the module probes the
        * PNG head itself. NULL: a still, or not admitted. */
-      if (!(sess = gfx_anim_preview_open(path, -1)))
+      if (!sess && !(sess = gfx_anim_preview_open(path, -1)))
+      {
+         slock_lock(t->lock);
+         t->anim_opening = false;
+         slock_unlock(t->lock);
          continue;
+      }
       loops_left = sess->loop_count; /* 0 = forever */
 
       slock_lock(t->lock);
+      t->anim_opening = false;
       if (t->quit || t->anim.gen != gen)
       {
          slock_unlock(t->lock);
@@ -798,6 +937,18 @@ static void ct_anim_thread(void *ud)
 }
 #endif
 
+#ifdef HAVE_THREADS
+/* Lock held. */
+static void ct_parked_drop(companion_thumbs_t *t)
+{
+   if (t->parked.sess)
+      gfx_anim_preview_close(t->parked.sess);
+   free(t->parked.path);
+   t->parked.sess = NULL;
+   t->parked.path = NULL;
+}
+#endif
+
 void companion_thumbs_animate(companion_thumbs_t *t, const char *path,
       int w, int h, uintptr_t tag, uint32_t bg)
 {
@@ -809,6 +960,9 @@ void companion_thumbs_animate(companion_thumbs_t *t, const char *path,
    slock_lock(t->lock);
    if (t->anim_sess)
       gfx_anim_preview_audio_stop(t->anim_sess); /* the previous one, now */
+   /* A session parked for the previous path is nobody's now. */
+   if (t->parked.path && strcmp(t->parked.path, path))
+      ct_parked_drop(t);
    free(t->anim.path);
    t->anim.path   = strldup(path, strlen(path) + 1);
    t->anim.w      = w;
@@ -839,6 +993,7 @@ void companion_thumbs_animate_stop(companion_thumbs_t *t)
    slock_lock(t->lock);
    t->anim.gen++;
    t->anim.wanted = false;
+   ct_parked_drop(t);
    /* Silence at once: the thread closes the session (and its audio)
     * at its next frame, but the mixer stream should not play on until
     * then. Under the lock, so the session is still published. */
@@ -935,6 +1090,9 @@ void companion_thumbs_free(companion_thumbs_t *t)
          scond_free(t->cond);
       slock_free(t->lock);
    }
+   if (t->parked.sess)
+      gfx_anim_preview_close(t->parked.sess);
+   free(t->parked.path);
 #endif
    free(t->anim.path);
    for (i = 0; i < t->done_len; i++)
@@ -1082,8 +1240,8 @@ size_t companion_thumbs_poll(companion_thumbs_t *t,
       struct ct_job job;
       while (t->queued && cpu_features_get_time_usec() < end
             && ct_next_job(t, &job))
-         ct_push_done(t, &job, ct_decode(job.e->path, job.e->w, job.e->h, job.bg,
-               NULL, NULL));
+         ct_push_done(t, &job, ct_decode(t, job.e->path, job.e->w,
+               job.e->h, job.bg, NULL, NULL));
    }
 #else
    (void)budget_us;

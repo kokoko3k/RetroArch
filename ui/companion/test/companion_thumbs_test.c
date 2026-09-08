@@ -40,6 +40,7 @@
 #include <retro_miscellaneous.h>
 
 #include "../companion_thumbs.h"
+#include "../../../gfx/gfx_anim_preview.h"
 #include <encodings/crc32.h>
 #include <zlib.h>
 
@@ -162,6 +163,8 @@ static bool write_apng(const char *path, unsigned w, unsigned h, int delay_ms)
    fclose(f);
    return true;
 }
+
+static const char *fixture_dir = "/tmp";
 
 static void fixture(char *out, size_t len, const char *name)
 {
@@ -518,6 +521,106 @@ static void test_animation(void)
    companion_thumbs_free(t);
 }
 
+/* One hover on a video, as every backend does it: request() the still
+ * and animate() the same path back to back.  The still is the video's
+ * first frame through a preview session; the animation must carry on
+ * from that session with the SECOND frame - not open a second session
+ * and decode the first frame again alongside the worker (two windows,
+ * two decoders, one picture decoded twice).  The reference is the same
+ * session API driven directly, scaled with the same scaler, so the
+ * expected delivery is: still == frame 0, then frames 1, 2, ... with
+ * no frame shown twice.  The fixture is an 8-frame H.264 MP4 whose
+ * frames are distinct solid colours (tools/companion_thumbs_test.sh
+ * builds it with ffmpeg). */
+static void test_video_hover(void)
+{
+   char mp4[512];
+   uint32_t ref[4];
+   int nref = 0;
+   companion_thumbs_t *t;
+   size_t i;
+
+   snprintf(mp4, sizeof(mp4), "%s/hover.mp4", fixture_dir);
+   {
+      FILE *f = fopen(mp4, "rb");
+      CHECK(f != NULL, "video fixture %s present (needs ffmpeg)", mp4);
+      if (!f)
+         return;
+      fclose(f);
+   }
+   /* reference: frames 0..3 of the file, scaled to 16x16 as the engine
+    * scales them, centre pixel */
+   {
+      gfx_anim_preview_t *p = gfx_anim_preview_open(mp4, -1);
+      CHECK(p != NULL, "reference session opens");
+      if (!p)
+         return;
+      for (nref = 0; nref < 4; nref++)
+      {
+         const uint32_t *fr;
+         uint32_t *bits;
+         int dur = 0;
+         bool na = false;
+         if (!gfx_anim_preview_feed(p)
+               || !(fr = gfx_anim_preview_next(p, &dur, &na)))
+            break;
+         bits = companion_thumbs_scale_ex(fr, p->width, p->height,
+               16, 16, 0, !na);
+         ref[nref] = bits ? bits[8 * 16 + 8] : 0;
+         free(bits);
+      }
+      gfx_anim_preview_close(p);
+   }
+   CHECK(nref == 4, "reference has 4 frames (got %d)", nref);
+   CHECK(ref[0] != ref[1] && ref[1] != ref[2] && ref[2] != ref[3],
+         "reference frames are distinct");
+   if (nref < 4)
+      return;
+
+   t = companion_thumbs_new(0, 2);
+   ngot = 0;
+   companion_thumbs_request(t, mp4, 16, 16, 1, true, 0);
+   companion_thumbs_animate(t, mp4, 16, 16, 2, 0);
+   CHECK(drain(t, 4, 5000) >= 4, "still + 3 animation frames in 5 s (got %u)",
+         (unsigned)ngot);
+   {
+      int still_at = -1, a = 0, ok = 1;
+      uint32_t anim_seen[3] = {0, 0, 0};
+      for (i = 0; i < ngot && i < 8; i++)
+      {
+         if (gots[i].tag == 1)
+         {
+            still_at = (int)i;
+            CHECK(!gots[i].null && gots[i].centre == ref[0],
+                  "still is frame 0: 0x%08x vs 0x%08x", gots[i].centre, ref[0]);
+         }
+         else if (gots[i].tag == 2 && a < 3)
+            anim_seen[a++] = gots[i].centre;
+      }
+      CHECK(still_at >= 0, "the still was delivered");
+      CHECK(a == 3, "three animation frames captured");
+      /* the first animation frame is the SECOND picture: the still
+       * already shows the first and the session carried on from it */
+      ok = (a == 3) && anim_seen[0] == ref[1] && anim_seen[1] == ref[2]
+            && anim_seen[2] == ref[3];
+      CHECK(ok, "animation continues from frame 1 after the still: "
+            "0x%08x 0x%08x 0x%08x vs 0x%08x 0x%08x 0x%08x",
+            anim_seen[0], anim_seen[1], anim_seen[2], ref[1], ref[2], ref[3]);
+   }
+   companion_thumbs_animate_stop(t);
+
+   /* the still already cached: the animation opens its own session and
+    * starts at frame 0 (nothing to continue from) */
+   ngot = 0;
+   companion_thumbs_animate(t, mp4, 16, 16, 3, 0);
+   CHECK(drain(t, 2, 4000) >= 2, "cached still: animation plays (got %u)",
+         (unsigned)ngot);
+   CHECK(ngot >= 1 && gots[0].tag == 3 && gots[0].centre == ref[0],
+         "cached still: animation starts at frame 0: 0x%08x vs 0x%08x",
+         gots[0].centre, ref[0]);
+   companion_thumbs_free(t);
+}
+
 /* The scaler: R,G,B,A memory-order input comes out as ARGB words with
  * no whole-canvas pass; a 4x downscale of a 2-colour checkerboard
  * averages the four taps (nearest would pick one colour per pixel). */
@@ -621,6 +724,7 @@ static void test_many_and_shutdown(void)
 int main(int argc, char **argv)
 {
    const char *dir = (argc > 1) ? argv[1] : "/tmp";
+   fixture_dir = dir;
    snprintf(tmpdir, sizeof(tmpdir), "%s/companion_thumbs_test_%ld", dir, (long)time(NULL));
    {
       char cmd[600];
@@ -639,6 +743,7 @@ int main(int argc, char **argv)
    test_abort();
    test_double_failure_no_uaf();
    test_animation();
+   test_video_hover();
    test_scaler();
    test_undecodable();
    test_many_and_shutdown();

@@ -26,9 +26,15 @@ trap 'rm -rf "$OUT"' EXIT
 
 LC=libretro-common
 INC="-I. -I$LC/include"
-DEFS="-DRARCH_INTERNAL -DLIBRETRO_STRL_CHECK_OVERLAP -DHAVE_THREADS -DHAVE_RTGA -DHAVE_RPNG"
+DEFS="-DRARCH_INTERNAL -DLIBRETRO_STRL_CHECK_OVERLAP -DHAVE_THREADS -DHAVE_RTGA -DHAVE_RPNG -DHAVE_RMP4 -DHAVE_RH264"
 SRCS="ui/companion/companion_thumbs.c \
       gfx/gfx_anim_preview.c \
+      $LC/formats/mp4/rmp4.c \
+      $LC/formats/mp4/rmp4_video.c \
+      $LC/formats/h264/rh264.c \
+      $LC/formats/h265/rh265.c \
+      $LC/formats/vp8/rvp8.c \
+      $LC/formats/image/image_hdr_blit.c \
       $LC/memory/mem_stats.c \
       ui/companion/test/companion_thumbs_test.c \
       $LC/formats/image_texture.c \
@@ -71,5 +77,15 @@ $CC -std=c89 -ansi -pedantic -Werror=pedantic -Wno-long-long -Wall -Wextra \
 
 $CC -std=gnu99 -O1 -g $SAN -Wall -Wextra -Wno-unused-parameter \
    $INC $DEFS $SRCS -o "$OUT/companion_thumbs_test" -lpthread -lm -lz
+
+# The video-hover test needs an MP4 whose frames are distinct solid
+# colours (see test_video_hover): 8 frames, Constrained Baseline, 2 KB.
+# ffmpeg is a hard requirement - a missing fixture is a test failure,
+# not a skip.
+command -v ffmpeg >/dev/null 2>&1 || { echo "ffmpeg is required (video fixture)" >&2; exit 2; }
+ffmpeg -v error -y -f lavfi \
+   -i "color=c=black:s=64x64:r=10,geq=r='255*mod(N\,2)':g='255*mod(floor(N/2)\,2)':b='128+64*mod(floor(N/4)\,2)'" \
+   -frames:v 8 -c:v libx264 -preset ultrafast -profile:v baseline -level 3.0 \
+   -pix_fmt yuv420p -g 4 -bf 0 "$OUT/hover.mp4"
 
 "$OUT/companion_thumbs_test" "$OUT"

@@ -31,7 +31,9 @@ jobs:
       - name: Install dependencies
         timeout-minutes: 8
         run: |
-          pkgs="build-essential check pkg-config zlib1g-dev lcov gcc-mingw-w64-x86-64 gcc-mingw-w64-i686 wine wine64"
+          # ffmpeg: tools/companion_thumbs_test.sh builds its video-hover
+          # fixture (a 2 KB Baseline MP4) with it.
+          pkgs="build-essential check pkg-config zlib1g-dev lcov gcc-mingw-w64-x86-64 gcc-mingw-w64-i686 wine wine64 ffmpeg"
           if dpkg -s $pkgs >/dev/null 2>&1; then
             echo "All packages already present on runner image; skipping apt."
             exit 0
@@ -113,8 +115,10 @@ jobs:
           set -eu
           # The shared thumbnail engine every desktop companion draws
           # through: real decoder, decode threads, cache, priority,
-          # cancel, shutdown.  Under both sanitizers, since it is the
-          # one piece of threaded code in the companions.
+          # cancel, shutdown, and one hover on a video (the still and
+          # the animation share one session).  Under both sanitizers,
+          # since it is the one piece of threaded code in the
+          # companions.
           tools/companion_thumbs_test.sh
           tools/companion_thumbs_test.sh tsan
           tools/companion_thumbs_test.sh asan
