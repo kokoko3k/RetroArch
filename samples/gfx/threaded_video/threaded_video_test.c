@@ -1,0 +1,352 @@
+/* Harness for threaded video, driving the real frame loop.
+ *
+ * The thread wrapper is installed and torn down by CMD_EVENT_REINIT,
+ * which the runtime toggle in the menu fires through the setting's
+ * write handler with a core loaded.  Every crash report on this path
+ * has the same shape: a runloop-thread reader (presentable, alive,
+ * focus, viewport) or a teardown barrier reaching the wrapper while
+ * it is being swapped for the plain driver, or the other way round.
+ * None of that is visible from a unit test of video_thread_wrapper.c
+ * alone, because the seam is between the wrapper and the runloop.
+ *
+ * So this links the shipping objects with only main() replaced, boots
+ * the frontend on the null drivers with the menu up, installs a
+ * retro_run that hands frames to the frontend the way a core does,
+ * and then does what the user does: toggle threaded video through
+ * the real setting handler, leave the menu, run frames, come back,
+ * toggle again - in a loop, under whatever sanitizer the objects
+ * were built with.
+ *
+ * Nothing is stubbed.
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+#include <boolean.h>
+
+#include "../../../runloop.h"
+#include "../../../retroarch.h"
+#include "../../../configuration.h"
+#include "../../../command.h"
+#include "../../../driver.h"
+#include "../../../frontend/frontend_driver.h"
+#include "../../../frontend/frontend.h"
+#include "../../../gfx/video_driver.h"
+#include "../../../gfx/video_thread_wrapper.h"
+#include "../../../menu/menu_driver.h"
+#include "../../../menu/menu_setting.h"
+#include "../../../verbosity.h"
+
+#include <time/rtime.h>
+#include <file/config_file.h>
+
+static unsigned failures = 0;
+
+#define CHECK(cond, ...) \
+   do { \
+      if (!(cond)) \
+      { \
+         fprintf(stderr, "FAIL %s:%d: ", __FILE__, __LINE__); \
+         fprintf(stderr, __VA_ARGS__); \
+         fprintf(stderr, "\n"); \
+         failures++; \
+      } \
+   } while (0)
+
+/* ------------------------------------------------------------------ */
+
+static void run_frames(unsigned n)
+{
+   unsigned i;
+   for (i = 0; i < n; i++)
+      runloop_iterate();
+}
+
+/* Frames the frontend has accepted from the core; the counter the core
+ * cannot fake and the wrapper cannot skip. */
+static uint64_t core_frames(void)
+{
+   return video_state_get_ptr()->frame_count;
+}
+
+static bool menu_is_up(void)
+{
+   return (menu_state_get_ptr()->flags & MENU_ST_FLAG_ALIVE) != 0;
+}
+
+/* What the menu does: write the setting's target, then its handler. */
+static void set_threaded_via_setting(bool on)
+{
+   rarch_setting_t *setting = menu_setting_find_enum(MENU_ENUM_LABEL_VIDEO_THREADED);
+   CHECK(setting != NULL, "video_threaded setting not found");
+   if (!setting)
+      return;
+   *setting->value.target.boolean = on;
+   if (setting->actions && setting->actions->change)
+      setting->actions->change(setting);
+}
+
+static void expect_wrapper(bool active, const char *when)
+{
+   video_driver_state_t *video_st = video_state_get_ptr();
+   CHECK(video_st->thread_wrapper_active == active,
+         "%s: thread_wrapper_active=%d, expected %d",
+         when, video_st->thread_wrapper_active, active);
+   CHECK(video_st->data != NULL, "%s: no video driver data", when);
+   if (active)
+   {
+      thread_video_t *thr = (thread_video_t*)video_st->data;
+      CHECK(thr->thread != NULL, "%s: wrapper active but no thread", when);
+      CHECK(thr->driver != NULL && thr->driver_data != NULL,
+            "%s: wrapper has no wrapped driver", when);
+   }
+   /* Runloop-thread readers that go through the wrapper. All of them
+    * have to work in either state without touching a stale handle. */
+   (void)video_context_driver_presentable();
+   (void)video_driver_has_focus();
+   (void)video_driver_has_windowed();
+   {
+      struct video_viewport vp;
+      memset(&vp, 0, sizeof(vp));
+      video_driver_get_viewport_info(&vp);
+   }
+}
+
+/* Frames rendered by the wrapper since the last call: proof that the
+ * worker is consuming what the runloop hands it. */
+static unsigned wrapper_frames_since(unsigned *last)
+{
+   video_driver_state_t *video_st = video_state_get_ptr();
+   thread_video_t *thr = (thread_video_t*)video_st->data;
+   unsigned now, d;
+   if (!video_st->thread_wrapper_active || !thr)
+      return 0;
+   now = thr->hit_count;
+   d   = now - *last;
+   *last = now;
+   return d;
+}
+
+/* ------------------------------------------------------------------ */
+/* Lane: the reported sequence, looped                                */
+/*   core running, menu up, threaded off -> on, leave menu, run,      */
+/*   back to menu, on -> off, leave menu, run.                        */
+/* ------------------------------------------------------------------ */
+
+static void lane_toggle_cycle(unsigned cycles)
+{
+   unsigned had = failures;
+   unsigned c;
+   unsigned last_hits = 0;
+
+   for (c = 0; c < cycles; c++)
+   {
+      uint64_t before;
+
+      CHECK(menu_is_up(), "cycle %u: menu not up at start", c);
+      expect_wrapper(false, "cycle start");
+
+      set_threaded_via_setting(true);
+      expect_wrapper(true, "after threaded on");
+      last_hits = 0;
+      wrapper_frames_since(&last_hits);
+
+      command_event(CMD_EVENT_MENU_TOGGLE, NULL);
+      CHECK(!menu_is_up(), "cycle %u: menu still up after toggle", c);
+
+      before = core_frames();
+      run_frames(90);
+      CHECK(core_frames() > before, "cycle %u: core did not run", c);
+      CHECK(wrapper_frames_since(&last_hits) > 0,
+            "cycle %u: wrapper rendered nothing over 90 frames", c);
+      expect_wrapper(true, "threaded in game");
+
+      command_event(CMD_EVENT_MENU_TOGGLE, NULL);
+      CHECK(menu_is_up(), "cycle %u: menu did not come back", c);
+      run_frames(5);
+      expect_wrapper(true, "threaded in menu");
+
+      set_threaded_via_setting(false);
+      expect_wrapper(false, "after threaded off");
+
+      command_event(CMD_EVENT_MENU_TOGGLE, NULL);
+      before = core_frames();
+      run_frames(30);
+      CHECK(core_frames() > before, "cycle %u: core did not run unthreaded", c);
+      expect_wrapper(false, "unthreaded in game");
+
+      command_event(CMD_EVENT_MENU_TOGGLE, NULL);
+      run_frames(2);
+   }
+
+   if (failures == had)
+      fprintf(stderr, "[pass] toggle cycle lane (%u cycles)\n", cycles);
+}
+
+/* ------------------------------------------------------------------ */
+/* Lane: reinit while threaded and in game                            */
+/*   VIDEO_REINIT and full DRIVERS_REINIT with the wrapper up, which  */
+/*   is what a resolution or fullscreen change does.                  */
+/* ------------------------------------------------------------------ */
+
+static void lane_reinit_under_wrapper(unsigned reps)
+{
+   unsigned had = failures;
+   unsigned i;
+
+   set_threaded_via_setting(true);
+   command_event(CMD_EVENT_MENU_TOGGLE, NULL);
+   run_frames(10);
+   expect_wrapper(true, "before reinit");
+
+   for (i = 0; i < reps; i++)
+   {
+      int flags = DRIVER_VIDEO_MASK | DRIVER_INPUT_MASK;
+      command_event(CMD_EVENT_REINIT, &flags);
+      run_frames(10);
+      expect_wrapper(true, "after video reinit");
+      command_event(CMD_EVENT_REINIT, NULL);
+      run_frames(10);
+      expect_wrapper(true, "after full reinit");
+   }
+
+   command_event(CMD_EVENT_MENU_TOGGLE, NULL);
+   set_threaded_via_setting(false);
+   expect_wrapper(false, "after lane");
+
+   if (failures == had)
+      fprintf(stderr, "[pass] reinit-under-wrapper lane (%u reps)\n", reps);
+}
+
+/* ------------------------------------------------------------------ */
+/* Lane: toggle with the menu closed                                  */
+/*   Setting written while the core is running, no menu in between,  */
+/*   as a hotkey or override would do it.                            */
+/* ------------------------------------------------------------------ */
+
+static void lane_toggle_in_game(unsigned cycles)
+{
+   unsigned had = failures;
+   unsigned c;
+
+   command_event(CMD_EVENT_MENU_TOGGLE, NULL);
+   CHECK(!menu_is_up(), "menu still up");
+
+   for (c = 0; c < cycles; c++)
+   {
+      set_threaded_via_setting(true);
+      run_frames(20);
+      expect_wrapper(true, "in-game on");
+      set_threaded_via_setting(false);
+      run_frames(20);
+      expect_wrapper(false, "in-game off");
+   }
+
+   command_event(CMD_EVENT_MENU_TOGGLE, NULL);
+
+   if (failures == had)
+      fprintf(stderr, "[pass] toggle-in-game lane (%u cycles)\n", cycles);
+}
+
+/* ------------------------------------------------------------------ */
+
+int main(int argc, char *argv[])
+{
+   char cfg_path[512];
+   char cmd[600];
+   char dir[400];
+   char *rarch_argv[8];
+   int rarch_argc = 0;
+   FILE *cfg;
+   char core_path[512];
+   unsigned cycles = argc > 1 ? (unsigned)atoi(argv[1]) : 10;
+
+   snprintf(dir, sizeof(dir), "/tmp/threaded_video_harness_%ld", (long)getpid());
+   snprintf(cmd, sizeof(cmd), "mkdir -p %s", dir);
+   if (system(cmd) != 0)
+      return 1;
+
+   snprintf(cfg_path, sizeof(cfg_path), "%s/harness.cfg", dir);
+   if ((cfg = fopen(cfg_path, "wb")))
+   {
+      fprintf(cfg, "video_driver = \"null\"\n");
+      fprintf(cfg, "audio_driver = \"null\"\n");
+      fprintf(cfg, "input_driver = \"null\"\n");
+      fprintf(cfg, "input_joypad_driver = \"null\"\n");
+      fprintf(cfg, "menu_driver = \"rgui\"\n");
+      fprintf(cfg, "video_threaded = \"false\"\n");
+      fprintf(cfg, "video_vsync = \"false\"\n");
+      fprintf(cfg, "menu_pause_libretro = \"true\"\n");
+      fprintf(cfg, "config_save_on_exit = \"false\"\n");
+      /* Tunable from the environment so the task worker can be kept
+       * out of the process: TSan's registry never observes that
+       * thread finishing when the frontend is booted from a foreign
+       * main(), and the join at exit spins inside libtsan. The
+       * shipping binary exits cleanly under TSan with the same tree,
+       * and the wrapper under test does not depend on this. */
+      fprintf(cfg, "threaded_data_runloop_enable = \"%s\"\n",
+            getenv("HARNESS_THREADED_TASKS") ? "true" : "false");
+      fclose(cfg);
+   }
+
+   config_file_set_io_default(config_file_io_filestream());
+   rtime_init();
+   retroarch_config_init();
+   retroarch_ctl(RARCH_CTL_STATE_FREE, NULL);
+   frontend_driver_init_first(NULL);
+
+   rarch_argv[rarch_argc++] = (char*)"retroarch";
+   rarch_argv[rarch_argc++] = (char*)"--config";
+   rarch_argv[rarch_argc++] = cfg_path;
+   /* The harness core, built next to this binary by build.sh. */
+   {
+      const char *slash = strrchr(argv[0], '/');
+      int dirlen        = slash ? (int)(slash - argv[0]) : 1;
+      snprintf(core_path, sizeof(core_path), "%.*s/harness_core.so",
+            dirlen, slash ? argv[0] : ".");
+   }
+   rarch_argv[rarch_argc++] = (char*)"-L";
+   rarch_argv[rarch_argc++] = core_path;
+
+   if (!retroarch_main_init(rarch_argc, rarch_argv))
+   {
+      fprintf(stderr, "FAIL: retroarch_main_init failed\n");
+      return 1;
+   }
+
+   /* The core starts without content and the menu closed. Run it,
+    * then open the menu, which is the state the reported sequence
+    * starts from. */
+   run_frames(5);
+   CHECK(runloop_state_get_ptr()->current_core_type != CORE_TYPE_DUMMY,
+         "harness core did not start (dummy core running)");
+   CHECK(!menu_is_up(), "menu up after starting a core");
+   command_event(CMD_EVENT_MENU_TOGGLE, NULL);
+   run_frames(5);
+   CHECK(menu_is_up(), "menu did not open");
+   expect_wrapper(false, "boot");
+
+   lane_toggle_cycle(cycles);
+   lane_reinit_under_wrapper(cycles / 2 + 1);
+   lane_toggle_in_game(cycles);
+
+   /* Orderly shutdown: the teardown barriers are part of what is
+    * under test. */
+   set_threaded_via_setting(true);
+   run_frames(3);
+   main_exit(NULL);
+
+   snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
+   if (system(cmd) != 0) { }
+
+   if (failures)
+   {
+      fprintf(stderr, "%u failure(s)\n", failures);
+      return 1;
+   }
+   fprintf(stderr, "all lanes passed (frontend accepted %llu core frames)\n", (unsigned long long)core_frames());
+   return 0;
+}
