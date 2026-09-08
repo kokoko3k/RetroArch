@@ -252,6 +252,57 @@ static void lane_toggle_in_game(unsigned cycles)
 }
 
 /* ------------------------------------------------------------------ */
+/* Lane: swap counter                                                 */
+/*   Advances by presents-per-frame on both paths, and by exactly one */
+/*   per present (no BFI, no sub-frames here). Read from the runloop  */
+/*   thread after a barrier so the worker's tally is complete.        */
+/* ------------------------------------------------------------------ */
+
+static void lane_swap_count(void)
+{
+   unsigned had = failures;
+   video_driver_state_t *video_st = video_state_get_ptr();
+   uint64_t before, after, frames0, frames1;
+
+   /* Direct path. */
+   command_event(CMD_EVENT_MENU_TOGGLE, NULL);
+   run_frames(3);
+   expect_wrapper(false, "swapcount direct");
+   before  = video_st->swap_count;
+   frames0 = core_frames();
+   run_frames(40);
+   after   = video_st->swap_count;
+   frames1 = core_frames();
+   CHECK(after - before == frames1 - frames0,
+         "direct path: swap_count moved %llu over %llu presented frames",
+         (unsigned long long)(after - before),
+         (unsigned long long)(frames1 - frames0));
+
+   /* Threaded path: the worker owns it; wait_idle drains it. */
+   set_threaded_via_setting(true);
+   run_frames(3);
+   expect_wrapper(true, "swapcount threaded");
+   video_thread_wait_idle();
+   before  = video_st->swap_count;
+   run_frames(40);
+   video_thread_wait_idle();
+   after   = video_st->swap_count;
+   {
+      thread_video_t *thr = (thread_video_t*)video_st->data;
+      CHECK(after > before, "threaded path: swap_count did not advance");
+      CHECK(after - before <= 40 + 3,
+            "threaded path: swap_count %llu over 40 frames",
+            (unsigned long long)(after - before));
+      (void)thr;
+   }
+   set_threaded_via_setting(false);
+   command_event(CMD_EVENT_MENU_TOGGLE, NULL);
+
+   if (failures == had)
+      fprintf(stderr, "[pass] swap-count lane\n");
+}
+
+/* ------------------------------------------------------------------ */
 
 int main(int argc, char *argv[])
 {
@@ -332,6 +383,7 @@ int main(int argc, char *argv[])
    lane_toggle_cycle(cycles);
    lane_reinit_under_wrapper(cycles / 2 + 1);
    lane_toggle_in_game(cycles);
+   lane_swap_count();
 
    /* Orderly shutdown: the teardown barriers are part of what is
     * under test. */
