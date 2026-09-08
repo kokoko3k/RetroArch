@@ -260,13 +260,14 @@ gfx_anim_preview_t *gfx_anim_preview_open(const char *path, int png_probe)
          else
             image_transfer_anim_stream_set_avail(stream, type, hi);
       }
-      /* Types without a progressive open (animated WEBP) return NULL
-       * with need_more clear: fall back to the whole buffer. */
-      if (!stream && !need_more)
-      {
-         if (data_transfer_window_extend(dt, blen))
-            stream = image_transfer_anim_stream_new((void*)base, blen, type);
-      }
+      /* NULL with need_more clear is conclusive for every streaming
+       * type (a still, or malformed): no whole-buffer retry.  There
+       * used to be one for animated WEBP, which had no partial open;
+       * it read the entire file into the reservation - for every
+       * still WEBP thumbnail too, only to learn it was a still - and
+       * then played the animation from a fully resident buffer with
+       * the windowed flag still set, so admission charged one window
+       * for a whole file. */
    }
 
    if (!stream)
@@ -327,13 +328,29 @@ bool gfx_anim_preview_feed(gfx_anim_preview_t *p)
    if (anchor > 0)
    {
       size_t margin = GFX_ANIM_PREVIEW_WINDOW_BACK;
-      size_t hi     = anchor + GFX_ANIM_PREVIEW_WINDOW_AHEAD;
+      size_t ahead  = GFX_ANIM_PREVIEW_WINDOW_AHEAD;
+      size_t budget = GFX_ANIM_PREVIEW_FEED_BUDGET;
+      size_t hi;
       size_t res_hi = 0;
+      size_t span_lo = 0, span_hi = 0;
       if (anchor > floor_off && anchor - floor_off < margin)
          margin = anchor - floor_off;
+      /* A frame larger than the lookahead (a lossless 4K WEBP or APNG
+       * frame can be tens of MB) would never fit below the wall: the
+       * decoder refuses it, consumed never moves, and the paced feed
+       * extends to the same short target every tick.  The indexing
+       * types name the next frame's span; cover it in one unpaced
+       * extend, exactly the burst a lap or an open already pays. */
+      image_transfer_anim_stream_next_span(p->stream, p->type,
+            &span_lo, &span_hi);
+      if (span_hi > span_lo && span_hi > anchor + ahead)
+      {
+         ahead  = span_hi - anchor;
+         budget = 0;
+      }
+      hi = anchor + ahead;
       if (!data_transfer_window_feed_budget(p->dt, anchor,
-               GFX_ANIM_PREVIEW_WINDOW_AHEAD, margin,
-               GFX_ANIM_PREVIEW_FEED_BUDGET, &res_hi))
+               ahead, margin, budget, &res_hi))
          return false;
       /* The demuxer's bound follows what the feed made resident, both
        * ways (a loop's rewind drops the frontier back to the head). */

@@ -131,11 +131,82 @@ def leading_padded(src, dst, target):
     os.unlink(dst + '.fs.mp4')
 
 
+def anim_webp(dst, secs, w, h, fps):
+    """Lossless animated WebP, one ANMF per frame.  Lossless so the
+    frames are large (hundreds of KB at 720p): the windowed-open test
+    needs a file well past the head + lookahead + margin the feeder is
+    allowed to keep resident, or a whole-file load would be
+    indistinguishable from a windowed one by RSS."""
+    subprocess.check_call([
+        'ffmpeg', '-v', 'error', '-y',
+        '-f', 'lavfi', '-i', 'testsrc2=s=%dx%d:r=%d' % (w, h, fps),
+        '-t', str(secs), '-c:v', 'libwebp_anim', '-lossless', '1',
+        '-compression_level', '0', '-loop', '0', dst])
+
+
+def anim_webp_big_frame(src, dst, frame_bytes):
+    """Rewrite an animated WebP so its SECOND frame is 'frame_bytes'
+    long: the frame's VP8L payload is preceded by an unknown sub-chunk
+    of padding, which the frame decoder skips.  The frame then spans
+    more than the feeder's lookahead, which is the case next_span
+    exists for - without it the window could never cover the frame and
+    the animation would sit at the wall forever."""
+    b = bytearray(open(src, 'rb').read())
+    pos, n = 12, 0
+    while pos + 8 <= len(b):
+        tag = bytes(b[pos:pos + 4])
+        sz = struct.unpack('<I', b[pos + 4:pos + 8])[0]
+        if tag == b'ANMF':
+            n += 1
+            if n == 2:
+                pad = frame_bytes - sz
+                if pad < 8:
+                    raise SystemExit('frame already that large')
+                pad -= 8
+                pad += pad & 1
+                chunk = b'PADx' + struct.pack('<I', pad) + bytes(pad)
+                ins = pos + 8 + 16       # after the 16-byte ANMF header
+                b[ins:ins] = chunk
+                b[pos + 4:pos + 8] = struct.pack('<I', sz + len(chunk))
+                b[4:8] = struct.pack('<I', len(b) - 8)
+                break
+        pos += 8 + sz + (sz & 1)
+    open(dst, 'wb').write(b)
+
+
+def still_webp(dst, w, h):
+    subprocess.check_call([
+        'ffmpeg', '-v', 'error', '-y',
+        '-f', 'lavfi', '-i', 'testsrc2=s=%dx%d:r=1' % (w, h),
+        '-frames:v', '1', '-c:v', 'libwebp', '-lossless', '1',
+        '-compression_level', '0', dst])
+
+
+def apng(dst, secs, w, h, fps):
+    """APNG: the same shape as the WebP - large lossless frames, many of
+    them, well past the window the feeder may keep."""
+    subprocess.check_call([
+        'ffmpeg', '-v', 'error', '-y',
+        '-f', 'lavfi', '-i', 'testsrc2=s=%dx%d:r=%d' % (w, h, fps),
+        '-t', str(secs), '-c:v', 'apng', '-pred', 'none', '-plays', '0',
+        '-f', 'apng', dst])
+
+
 def main():
     out = sys.argv[1] if len(sys.argv) > 1 else '.'
     os.makedirs(out, exist_ok=True)
     j = lambda n: os.path.join(out, n)
     BIG = 7817178301          # the size that started all of this
+
+    # Frame-indexed animations for the windowed open: ~60 MB of
+    # lossless 720p frames each, one with a frame larger than the
+    # feeder's lookahead, plus a still WebP the probe must reject
+    # from its first chunk.
+    anim_webp(j('anim_lossless.webp'), 20, 1280, 720, 10)
+    anim_webp_big_frame(j('anim_lossless.webp'), j('anim_bigframe.webp'),
+                        12 * 1024 * 1024)
+    still_webp(j('still_lossless.webp'), 1920, 1080)
+    apng(j('anim_lossless.png'), 30, 1280, 720, 10)
 
     seed(j('seed_small.mp4'), 3, 640, 360, '300k')
     seed(j('seed_4k.mp4'), 3, 3840, 2160, '400k')
@@ -155,7 +226,7 @@ def main():
         if os.path.exists(j(f)):
             os.unlink(j(f))
     for f in sorted(os.listdir(out)):
-        if f.endswith('.mp4'):
+        if f.endswith(('.mp4', '.webp', '.png')):
             p = j(f)
             print('%-24s %13d bytes  %s on disk'
                   % (f, os.path.getsize(p),
