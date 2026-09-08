@@ -79,6 +79,12 @@ static void *video_thread_init_never_call(const video_info_t *video,
 /* thread -> user */
 static void video_thread_reply(thread_video_t *thr, const thread_packet_t *pkt)
 {
+   if (thr->inline_reply)
+   {
+      *thr->inline_reply = *pkt;
+      return;
+   }
+
    slock_lock(thr->lock);
 
    thr->cmd_data  = *pkt;
@@ -152,6 +158,17 @@ static bool video_thread_pump_wait(scond_t *cond, slock_t *lock)
 #endif
 }
 
+/* True when the caller is the video thread itself. A marshalled call
+ * that reaches the wrapper from inside driver->frame() - the menu
+ * drivers do this with set_viewport - must go to the driver directly:
+ * sending a command from the thread that answers commands waits on
+ * itself forever. */
+static bool video_thread_is_self(thread_video_t *thr)
+{
+   return thr->thread
+       && sthread_get_thread_id(thr->thread) == sthread_get_current_thread_id();
+}
+
 /* user -> thread */
 static void video_thread_wait_reply(thread_video_t *thr, thread_packet_t *pkt)
 {
@@ -170,8 +187,24 @@ static void video_thread_wait_reply(thread_video_t *thr, thread_packet_t *pkt)
 }
 
 /* user -> thread */
+static bool video_thread_handle_packet(thread_video_t *thr,
+      const thread_packet_t *incoming);
+
 static void video_thread_send_and_wait_user_to_thread(thread_video_t *thr, thread_packet_t *pkt)
 {
+   /* On the video thread already - a wrapper entry point reached from
+    * inside driver->frame(), as the menu drivers do with set_viewport -
+    * the command runs here and now. Sending it would wait for a reply
+    * from the only thread that could give one. The reply lands in the
+    * caller's packet, leaving the mailbox to whatever the main thread
+    * may have sent meanwhile. */
+   if (video_thread_is_self(thr))
+   {
+      thr->inline_reply = pkt;
+      video_thread_handle_packet(thr, pkt);
+      thr->inline_reply = NULL;
+      return;
+   }
    video_thread_send_packet(thr, pkt);
    video_thread_wait_reply(thr, pkt);
 }
@@ -652,13 +685,13 @@ static void video_thread_loop(void *data)
                 * when the frame was built and is superseded here. */
                video_info->swap_count = video_state_get_ptr()->swap_count;
                /* Retain what this frame puts on screen when the setting
-                * is on and the driver can put it there again. BFI and
-                * sub-frames present more than one image per frame; a
-                * repeat would show only the last, so they opt out. */
+                * is on and the driver can put it there again. Shader
+                * sub-frames opt out: each is a different shader output
+                * and only the last would be retained. BFI is fine, the
+                * driver replays the whole group. */
                video_info->retain_output =
                      video_info->threaded_present_repeat
                   && thr->poke && thr->poke->present_last
-                  && !video_info->black_frame_insertion
                   && video_info->shader_subframes <= 1;
 
                ret = thr->driver->frame(thr->driver_data,
@@ -681,9 +714,12 @@ static void video_thread_loop(void *data)
                      ? thr->driver_refresh_rate : video_info->refresh_rate;
                   presents = video_driver_presents_per_frame(video_info);
                   thr->last_present   = cpu_features_get_time_usec();
+                  /* A repeat replays the whole group, so it is due a
+                   * group's worth of display periods later. */
                   thr->present_period = hz > 0.0f
-                     ? (retro_time_t)(1000000.0f / hz) : 0;
+                     ? (retro_time_t)(1000000.0f * (float)presents / hz) : 0;
                   thr->present_repeat = video_info->retain_output;
+                  thr->present_group  = (unsigned)presents;
                }
                else
                   thr->present_repeat = false;
@@ -739,16 +775,16 @@ static void video_thread_loop(void *data)
           * so the display keeps its cadence. No shader chain runs and
           * no menu texture is touched, so this is not a rendered frame
           * for the purposes of video_thread_wait_idle(). */
-         bool ok = false;
+         unsigned swaps = 0;
          slock_lock(thr->frame.lock);
          if (thr->driver_data && thr->poke && thr->poke->present_last)
-            ok = thr->poke->present_last(thr->driver_data);
+            swaps = thr->poke->present_last(thr->driver_data);
          slock_unlock(thr->frame.lock);
 
          slock_lock(thr->lock);
-         if (ok)
+         if (swaps)
          {
-            video_state_get_ptr()->swap_count++;
+            video_state_get_ptr()->swap_count += swaps;
             thr->frames_repeated++;
             thr->last_present   = cpu_features_get_time_usec();
          }
@@ -1699,18 +1735,18 @@ static float thread_get_refresh_rate(void *data)
 /* Asks the video thread to show the retained frame again as soon as it
  * is idle. Returns whether there is a retained frame to show; the
  * present itself happens on the video thread. */
-static bool thread_present_last(void *data)
+static unsigned thread_present_last(void *data)
 {
-   bool ret;
+   unsigned ret = 0;
    thread_video_t *thr = (thread_video_t*)data;
    if (!thr)
-      return false;
+      return 0;
    slock_lock(thr->lock);
-   ret = thr->present_repeat;
-   if (ret)
+   if (thr->present_repeat)
    {
       thr->repeat_request = true;
       scond_signal(thr->cond_thread);
+      ret = thr->present_group;
    }
    slock_unlock(thr->lock);
    return ret;

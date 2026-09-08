@@ -192,6 +192,8 @@ typedef struct thread_video
     * video thread after each frame and read under 'lock'; 0 when it
     * has none. The presenter paces on it in preference to the setting. */
    float driver_refresh_rate;
+   /* Swaps one repeat makes: the group the retained frame made. */
+   unsigned present_group;
    bool present_repeat;
    /* A main-thread present_last() asks for one repeat at the next
     * opportunity rather than waiting for the deadline. */
@@ -258,6 +260,11 @@ typedef struct thread_video
    unsigned scale_height;
 
    thread_packet_t cmd_data;
+   /* Set by the video thread while it runs a command inline on itself:
+    * the reply goes here instead of into cmd_data, so a command the
+    * main thread sent meanwhile is neither answered nor overwritten.
+    * Video thread only. */
+   thread_packet_t *inline_reply;
    video_driver_t video_thread;
 
    enum thread_cmd send_cmd;

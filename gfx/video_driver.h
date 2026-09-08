@@ -729,12 +729,14 @@ typedef struct video_poke_interface
          enum texture_filter_type filter_type);
 
    /* Present the output retained by the last frame() that ran with
-    * video_frame_info_t::retain_output set, again, as one more swap:
-    * no shader chain, no menu, no OSD, a copy into the next swapchain
-    * image and a present. Returns false when there is nothing retained
-    * or nothing to present to. Drivers without a cheap way to do this
+    * video_frame_info_t::retain_output set, again: no shader chain, no
+    * menu, no OSD, a copy into the next swapchain image and a present.
+    * Under BFI the whole group that frame made is replayed - its light
+    * presents and its dark ones - so the strobe pattern holds. Returns
+    * the number of swaps made, 0 when there is nothing retained or
+    * nothing to present to. Drivers without a cheap way to do this
     * leave it NULL. */
-   bool (*present_last)(void *data);
+   unsigned (*present_last)(void *data);
 } video_poke_interface_t;
 
 /* msg is for showing a message on the screen

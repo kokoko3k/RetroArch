@@ -352,6 +352,31 @@ static void lane_present_repeat(void)
    run_frames(30);
    expect_wrapper(true, "after stall");
 
+   /* BFI: a repeat replays the whole light+dark group, so it comes
+    * half as often and moves swap_count by two. */
+   settings->uints.video_black_frame_insertion = 1;
+   run_frames(5);
+   video_thread_wait_idle();
+   slock_lock(thr->lock);
+   rep0   = thr->frames_repeated;
+   slock_unlock(thr->lock);
+   swaps0 = video_thread_swap_count();
+   retro_sleep(70);
+   video_thread_wait_idle();
+   slock_lock(thr->lock);
+   rep1   = thr->frames_repeated;
+   slock_unlock(thr->lock);
+   swaps1 = video_thread_swap_count();
+   CHECK(rep1 > rep0, "no group repeats during a 70 ms stall under BFI");
+   CHECK(rep1 - rep0 <= 4,
+         "%llu group repeats over 70 ms at 60 Hz with BFI 1 (period should be ~33 ms)",
+         (unsigned long long)(rep1 - rep0));
+   CHECK(swaps1 - swaps0 == 2 * (rep1 - rep0),
+         "swap_count moved %llu for %llu group repeats of two swaps",
+         (unsigned long long)(swaps1 - swaps0), (unsigned long long)(rep1 - rep0));
+   settings->uints.video_black_frame_insertion = 0;
+   run_frames(5);
+
    /* Off: no repeats at all through the same stall. */
    settings->bools.video_threaded_present_repeat = false;
    run_frames(5);
@@ -531,6 +556,93 @@ static void lane_second_ring_waiter(void)
 }
 
 /* ------------------------------------------------------------------ */
+/* Lane: wrapper entry points called from inside frame()              */
+/*   The menu drivers call current_video->set_viewport() while they   */
+/*   draw, which under the wrapper is on the video thread. A blocking  */
+/*   command sent from there waits on itself. This wraps the driver   */
+/*   the wrapper wraps so its frame() does exactly that, plus the      */
+/*   other marshalled calls, while the main thread keeps sending its   */
+/*   own commands into the same mailbox.                               */
+/* ------------------------------------------------------------------ */
+
+static video_driver_t reentrant_driver;
+static const video_driver_t *reentrant_inner;
+static unsigned reentrant_frames;
+
+static bool reentrant_frame(void *data, const void *frame, unsigned w,
+      unsigned h, uint64_t count, unsigned pitch, const char *msg,
+      video_frame_info_t *info)
+{
+   video_driver_state_t *video_st = video_state_get_ptr();
+   const video_driver_t *cur      = video_st->current_video;
+   const video_poke_interface_t *poke = NULL;
+   bool ret;
+
+   /* As ozone/xmb do: through the frontend's current driver, which is
+    * the wrapper, from the video thread. */
+   if (cur && cur->set_viewport)
+      cur->set_viewport(video_st->data, w, h, false, true);
+   if (cur && cur->set_nonblock_state)
+      cur->set_nonblock_state(video_st->data, false, false, 1);
+   if (cur && cur->poke_interface)
+      cur->poke_interface(video_st->data, &poke);
+   if (poke && poke->set_aspect_ratio)
+      poke->set_aspect_ratio(video_st->data, 0);
+   if (poke && poke->set_hdr_menu_nits)
+      poke->set_hdr_menu_nits(video_st->data, 100.0f);
+   if (poke && poke->get_refresh_rate)
+      (void)poke->get_refresh_rate(video_st->data);
+
+   ret = reentrant_inner->frame(data, frame, w, h, count, pitch, msg, info);
+   reentrant_frames++;
+   return ret;
+}
+
+static void lane_reentrant_from_frame(void)
+{
+   unsigned had = failures;
+   video_driver_state_t *video_st = video_state_get_ptr();
+   thread_video_t *thr;
+   const video_driver_t *drv;
+   unsigned before, i;
+
+   set_threaded_via_setting(true);
+   run_frames(3);
+   expect_wrapper(true, "reentrant lane");
+   thr = (thread_video_t*)video_st->data;
+
+   /* Swap the wrapped driver for one whose frame() re-enters. */
+   video_thread_wait_idle();
+   reentrant_inner  = thr->driver;
+   reentrant_driver = *thr->driver;
+   reentrant_driver.frame = reentrant_frame;
+   thr->driver      = &reentrant_driver;
+   reentrant_frames = 0;
+
+   /* Frames from the core while the main thread also sends commands
+    * of its own, so the inline path and the mailbox coexist. */
+   drv    = video_st->current_video;
+   before = reentrant_frames;
+   for (i = 0; i < 60; i++)
+   {
+      run_frames(1);
+      if (drv->set_rotation)
+         drv->set_rotation(video_st->data, i & 3);
+      if ((i % 7) == 0 && drv->set_viewport)
+         drv->set_viewport(video_st->data, 800, 600, false, true);
+   }
+   video_thread_wait_idle();
+   CHECK(reentrant_frames > before,
+         "re-entering frame() never completed (self-wait)");
+
+   thr->driver = reentrant_inner;
+   set_threaded_via_setting(false);
+
+   if (failures == had)
+      fprintf(stderr, "[pass] reentrant-from-frame lane (%u frames)\n", reentrant_frames);
+}
+
+/* ------------------------------------------------------------------ */
 
 int main(int argc, char *argv[])
 {
@@ -615,6 +727,7 @@ int main(int argc, char *argv[])
    lane_present_repeat();
    lane_every_command_replies();
    lane_second_ring_waiter();
+   lane_reentrant_from_frame();
 
    /* Orderly shutdown: the teardown barriers are part of what is
     * under test. */

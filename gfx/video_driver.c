@@ -417,7 +417,13 @@ static void *video_null_init(const video_info_t *video,
 static bool video_null_frame(void *a, const void *b, unsigned c, unsigned d,
 uint64_t e, unsigned f, const char *g, video_frame_info_t *h) { return true; }
 static void video_null_free(void *a) { }
-static bool video_null_present_last(void *a) { return true; }
+static unsigned video_null_present_last(void *a)
+{
+   /* Nothing to show, but the wrapper paces on what a repeat would
+    * have been: the group the settings describe. */
+   settings_t *settings = config_get_ptr();
+   return settings ? settings->uints.video_black_frame_insertion + 1 : 1;
+}
 static const video_poke_interface_t video_null_poke_interface = {
    NULL, /* get_flags */
    NULL, /* load_texture */

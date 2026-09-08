@@ -272,6 +272,10 @@ typedef struct vk
    struct vk_image retained;
    unsigned retained_width;
    unsigned retained_height;
+   /* What the frame that filled 'retained' put on screen: light
+    * presents of it, then dark ones. present_last() replays that. */
+   unsigned retained_light;
+   unsigned retained_dark;
    struct vk_image readback_image;
 #endif /* VULKAN_HDR_SWAPCHAIN */
 
@@ -6633,23 +6637,20 @@ static void vulkan_retain_backbuffer(vk_t *vk, struct vk_image *backbuffer)
          VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
 }
 
-/* One more swap of the retained image: copy it into the swapchain image
+/* One swap of the retained image: copy it into the swapchain image
  * acquired by the previous swap_buffers() and present. Same submit shape
  * as vulkan_inject_black_frame(), with the copy where the clear is. */
-static bool vulkan_present_last(void *data)
+static bool vulkan_present_retained_once(vk_t *vk)
 {
    VkSubmitInfo submit_info;
    VkCommandBufferBeginInfo begin_info;
    VkImageCopy region;
-   vk_t *vk                            = (vk_t*)data;
    unsigned frame_index;
    unsigned swapchain_index;
    struct vk_per_frame *chain;
    struct vk_image *backbuffer;
 
-   if (     !vk
-         || vk->retained.image == VK_NULL_HANDLE
-         || !(vk->context->flags & VK_CTX_FLAG_HAS_ACQUIRED_SWAPCHAIN)
+   if (     !(vk->context->flags & VK_CTX_FLAG_HAS_ACQUIRED_SWAPCHAIN)
          || vk->retained_width  != vk->context->swapchain_width
          || vk->retained_height != vk->context->swapchain_height)
       return false;
@@ -6741,6 +6742,37 @@ static bool vulkan_present_last(void *data)
       vk->ctx_driver->swap_buffers(vk->ctx_data);
 
    return true;
+}
+
+static void vulkan_inject_black_frame(vk_t *vk, video_frame_info_t *video_info);
+
+/* Replays the group the retaining frame made: its light presents, then
+ * its dark ones, so BFI keeps its strobe pattern through a repeat. */
+static unsigned vulkan_present_last(void *data)
+{
+   unsigned i;
+   unsigned done = 0;
+   vk_t *vk      = (vk_t*)data;
+
+   if (!vk || vk->retained.image == VK_NULL_HANDLE)
+      return 0;
+
+   for (i = 0; i < vk->retained_light; i++)
+   {
+      if (!vulkan_present_retained_once(vk))
+         return done;
+      done++;
+   }
+   for (i = 0; i < vk->retained_dark; i++)
+   {
+      if (!(vk->context->flags & VK_CTX_FLAG_HAS_ACQUIRED_SWAPCHAIN))
+         return done;
+      vulkan_inject_black_frame(vk, NULL);
+      if (vk->ctx_driver->swap_buffers)
+         vk->ctx_driver->swap_buffers(vk->ctx_data);
+      done++;
+   }
+   return done;
 }
 
 static void vulkan_inject_black_frame(vk_t *vk, video_frame_info_t *video_info)
@@ -8108,10 +8140,17 @@ static bool vulkan_frame(void *data, const void *frame,
       }
    }
 
+   /* Not from the BFI light dupes, which recurse in here with the
+    * emulation lock held and would only copy the same image again. */
    if (     video_info->retain_output
          && (backbuffer->image != VK_NULL_HANDLE)
-         && (vk->context->flags & VK_CTX_FLAG_HAS_ACQUIRED_SWAPCHAIN))
+         && (vk->context->flags & VK_CTX_FLAG_HAS_ACQUIRED_SWAPCHAIN)
+         && !(vk->context->flags & VK_CTX_FLAG_SWAP_INTERVAL_EMULATION_LOCK))
+   {
       vulkan_retain_backbuffer(vk, backbuffer);
+      vk->retained_light = 1;
+      vk->retained_dark  = 0;
+   }
 
    if (    waits_for_semaphores
        && (vk->hw.src_queue_family != VK_QUEUE_FAMILY_IGNORED)
@@ -8366,6 +8405,15 @@ static bool vulkan_frame(void *data, const void *frame,
             if (vk->ctx_driver->swap_buffers)
                vk->ctx_driver->swap_buffers(vk->ctx_data);
          }
+      }
+
+      /* The group this frame made, for present_last() to replay. */
+      if (     video_info->retain_output
+            && !(vk->context->flags & VK_CTX_FLAG_SWAP_INTERVAL_EMULATION_LOCK))
+      {
+         vk->retained_light = 1 + (video_info->black_frame_insertion
+               - video_info->bfi_dark_frames);
+         vk->retained_dark  = video_info->bfi_dark_frames;
       }
    }
 
