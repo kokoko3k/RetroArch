@@ -1640,7 +1640,13 @@ void gfx_thumbnail_request(
                         gfx_thumbnail_downscale_cap(),
                         gfx_thumbnail_handle_upload, thumbnail_tag))
                {
-                  thumbnail->list_id = thumbnail_tag->list_id;
+                  /* Not thumbnail_tag->list_id: the tag belongs to the
+                   * task from the push on, and its callback frees it
+                   * when the load completes - on another thread, so a
+                   * fast load races this line (heap-use-after-free
+                   * under the harness's synchronous stub, where the
+                   * callback has already run). */
+                  thumbnail->list_id = p_gfx_thumb->list_id;
                   GFX_THUMB_STATUS_STORE(&thumbnail->status, GFX_THUMBNAIL_STATUS_PENDING);
                }
             }
@@ -1772,7 +1778,9 @@ void gfx_thumbnail_request_file(
          gfx_thumbnail_downscale_cap(),
          gfx_thumbnail_handle_upload, thumbnail_tag))
    {
-      thumbnail->list_id = thumbnail_tag->list_id;
+      /* Same as gfx_thumbnail_request: the tag is the task's from the
+       * push on and may already be freed by its callback. */
+      thumbnail->list_id = p_gfx_thumb->list_id;
       GFX_THUMB_STATUS_STORE(&thumbnail->status, GFX_THUMBNAIL_STATUS_PENDING);
    }
 }
