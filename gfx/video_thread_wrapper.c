@@ -266,6 +266,27 @@ static bool video_thread_handle_packet(
          video_thread_reply(thr, &pkt);
          break;
 
+      case CMD_SET_VIEWPORT:
+         if (thr->driver_data && thr->driver && thr->driver->set_viewport)
+            thr->driver->set_viewport(thr->driver_data,
+                  pkt.data.set_viewport.width,
+                  pkt.data.set_viewport.height,
+                  pkt.data.set_viewport.force_full,
+                  pkt.data.set_viewport.allow_rotate);
+         video_thread_reply(thr, &pkt);
+         break;
+
+      case CMD_SET_NONBLOCK:
+         /* The swapchain lives on this thread; swap interval and
+          * adaptive vsync are its settings and have to be applied here. */
+         if (thr->driver_data && thr->driver && thr->driver->set_nonblock_state)
+            thr->driver->set_nonblock_state(thr->driver_data,
+                  pkt.data.nonblock.nonblock,
+                  pkt.data.nonblock.adaptive_vsync,
+                  pkt.data.nonblock.swap_interval);
+         video_thread_reply(thr, &pkt);
+         break;
+
       case CMD_READ_VIEWPORT:
          if (thr->driver_data && thr->driver &&
                thr->driver->viewport_info && thr->driver->read_viewport)
@@ -497,6 +518,8 @@ static bool video_thread_handle_packet(
                thr->driver_data,
                pkt.data.hdr.expand_gamut
             );
+         video_thread_reply(thr, &pkt);
+         break;
 
       case CMD_POKE_SET_HDR_SCANLINES:
          if (thr->driver_data && thr->poke && thr->poke->set_hdr_scanlines)
@@ -548,9 +571,10 @@ static void video_thread_loop(void *data)
          {
             retro_time_t now      = cpu_features_get_time_usec();
             retro_time_t deadline = thr->last_present + thr->present_period;
-            if (now >= deadline)
+            if (now >= deadline || thr->repeat_request)
             {
-               repeat_due = true;
+               thr->repeat_request = false;
+               repeat_due          = true;
                break;
             }
             scond_wait_timeout(thr->cond_thread, thr->lock, deadline - now);
@@ -584,6 +608,7 @@ static void video_thread_loop(void *data)
       {
          struct video_viewport vp;
          uint64_t        presents = 0;
+         float       refresh_rate = 0.0f;
          bool               alive = false;
          bool               focus = false;
          bool        has_windowed = false;
@@ -645,13 +670,14 @@ static void video_thread_loop(void *data)
 
                if (ret)
                {
-                  presents = video_driver_presents_per_frame(video_info);
                   /* The presenter's clock: this frame just went out,
                    * and the next one is due a display period later. */
+                  float hz = thr->driver_refresh_rate > 0.0f
+                     ? thr->driver_refresh_rate : video_info->refresh_rate;
+                  presents = video_driver_presents_per_frame(video_info);
                   thr->last_present   = cpu_features_get_time_usec();
-                  thr->present_period = video_info->refresh_rate > 0.0f
-                     ? (retro_time_t)(1000000.0f / video_info->refresh_rate)
-                     : 0;
+                  thr->present_period = hz > 0.0f
+                     ? (retro_time_t)(1000000.0f / hz) : 0;
                   thr->present_repeat = video_info->retain_output;
                }
                else
@@ -669,6 +695,8 @@ static void video_thread_loop(void *data)
                    * context, and the dispatching call would read back
                    * the value published here on the previous frame. */
                   presentable = video_context_driver_presentable_direct();
+                  if (thr->poke && thr->poke->get_refresh_rate)
+                     refresh_rate = thr->poke->get_refresh_rate(thr->driver_data);
                }
             }
             else
@@ -695,6 +723,7 @@ static void video_thread_loop(void *data)
           * happens here, under lock, so the main thread can read it
           * consistently through video_thread_swap_count(). */
          video_state_get_ptr()->swap_count += presents;
+         thr->driver_refresh_rate = refresh_rate;
          thr->frame.busy    = false;
          scond_signal(thr->cond_cmd);
          slock_unlock(thr->lock);
@@ -882,7 +911,16 @@ static bool video_thread_frame(void *data, const void *frame_,
          : 0;
 
       if (height > rows)
+      {
+         if (!thr->clamp_logged)
+         {
+            RARCH_WARN("[Video] Threaded video: core frame %ux%u exceeds "
+                  "the declared maximum, cropping to %u rows.\n",
+                  width, height, rows);
+            thr->clamp_logged = true;
+         }
          height            = rows;
+      }
 
       if (src)
       {
@@ -955,7 +993,17 @@ static void video_thread_set_nonblock_state(void *data, bool state,
    thread_video_t *thr = (thread_video_t*)data;
 
    if (thr)
-      thr->nonblock = state;
+   {
+      thread_packet_t pkt;
+      /* nonblock also drives this side's paced wait in
+       * video_thread_frame(); the wrapped driver gets all three. */
+      thr->nonblock                    = state;
+      pkt.type                         = CMD_SET_NONBLOCK;
+      pkt.data.nonblock.nonblock       = state;
+      pkt.data.nonblock.adaptive_vsync = adaptive_vsync_enabled;
+      pkt.data.nonblock.swap_interval  = swap_interval;
+      video_thread_send_and_wait_user_to_thread(thr, &pkt);
+   }
 }
 
 static bool video_thread_init(thread_video_t *thr,
@@ -1050,10 +1098,13 @@ static void video_thread_set_viewport(void *data, unsigned width,
 
    if (thr && thr->driver_data && thr->driver && thr->driver->set_viewport)
    {
-      slock_lock(thr->lock);
-      thr->driver->set_viewport(thr->driver_data, width, height,
-         force_full, video_allow_rotate);
-      slock_unlock(thr->lock);
+      thread_packet_t pkt;
+      pkt.type                         = CMD_SET_VIEWPORT;
+      pkt.data.set_viewport.width      = width;
+      pkt.data.set_viewport.height     = height;
+      pkt.data.set_viewport.force_full = force_full;
+      pkt.data.set_viewport.allow_rotate = video_allow_rotate;
+      video_thread_send_and_wait_user_to_thread(thr, &pkt);
    }
 }
 
@@ -1629,12 +1680,44 @@ static uintptr_t thread_load_texture_compressed(void *video_data,
    return 0;
 }
 
+static float thread_get_refresh_rate(void *data)
+{
+   float ret;
+   thread_video_t *thr = (thread_video_t*)data;
+   if (!thr)
+      return 0.0f;
+   slock_lock(thr->lock);
+   ret = thr->driver_refresh_rate;
+   slock_unlock(thr->lock);
+   return ret;
+}
+
+/* Asks the video thread to show the retained frame again as soon as it
+ * is idle. Returns whether there is a retained frame to show; the
+ * present itself happens on the video thread. */
+static bool thread_present_last(void *data)
+{
+   bool ret;
+   thread_video_t *thr = (thread_video_t*)data;
+   if (!thr)
+      return false;
+   slock_lock(thr->lock);
+   ret = thr->present_repeat;
+   if (ret)
+   {
+      thr->repeat_request = true;
+      scond_signal(thr->cond_thread);
+   }
+   slock_unlock(thr->lock);
+   return ret;
+}
+
 static const video_poke_interface_t thread_poke = {
    thread_get_flags,
    thread_load_texture,
    thread_unload_texture,
    thread_set_video_mode,
-   NULL, /* get_refresh_rate */
+   thread_get_refresh_rate,
    thread_set_filtering,
    thread_get_video_output_size,
    thread_get_video_output_prev,
@@ -1657,7 +1740,8 @@ static const video_poke_interface_t thread_poke = {
    thread_set_hdr_scanlines,
    thread_set_hdr_subpixel_layout,
    thread_supports_texture_format,
-   thread_load_texture_compressed
+   thread_load_texture_compressed,
+   thread_present_last
 };
 
 static void video_thread_get_poke_interface(void *data,

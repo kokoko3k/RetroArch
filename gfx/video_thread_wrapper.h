@@ -63,6 +63,7 @@ enum thread_cmd
    CMD_POKE_SET_HDR_EXPAND_GAMUT,
    CMD_POKE_SET_HDR_SCANLINES,
    CMD_POKE_SET_HDR_SUBPIXEL_LAYOUT,
+   CMD_SET_NONBLOCK,
 
    CMD_DUMMY = INT_MAX
 };
@@ -97,6 +98,13 @@ typedef struct thread_packet
          bool force_full;
          bool allow_rotate;
       } set_viewport;
+
+      struct
+      {
+         unsigned swap_interval;
+         bool nonblock;
+         bool adaptive_vsync;
+      } nonblock;
 
       struct
       {
@@ -180,7 +188,16 @@ typedef struct thread_video
    retro_time_t present_period;
    retro_time_t last_present;
    uint64_t frames_repeated;
+   /* The wrapped driver's answer to get_refresh_rate, polled on the
+    * video thread after each frame and read under 'lock'; 0 when it
+    * has none. The presenter paces on it in preference to the setting. */
+   float driver_refresh_rate;
    bool present_repeat;
+   /* A main-thread present_last() asks for one repeat at the next
+    * opportunity rather than waiting for the deadline. */
+   bool repeat_request;
+   /* Log the geometry clamp once per session, not per frame. */
+   bool clamp_logged;
 
    slock_t *lock;
    /* cond_cmd carries two distinct predicates - the command reply

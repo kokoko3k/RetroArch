@@ -24,6 +24,9 @@
 #include "../configuration.h"
 #include "../list_special.h"
 #include "../gfx/video_driver.h"
+#ifdef HAVE_THREADS
+#include "../gfx/video_thread_wrapper.h"
+#endif
 #include "../paths.h"
 #include "../retroarch.h"
 #include "../runloop.h"
@@ -136,6 +139,12 @@ bool recording_deinit(void)
    bool history_list_enable        = config_get_ptr()->bools.history_list_enable;
 #endif
 
+#ifdef HAVE_THREADS
+   /* The GPU recorder reads from the frames the video thread presents;
+    * let any in-flight one finish before its readback target goes. */
+   video_thread_wait_idle();
+#endif
+
    if (     !recording_st->data
 		   || !recording_st->driver)
       return false;
@@ -196,6 +205,12 @@ bool recording_init(void)
       video_driver_pix_fmt              = video_st->pix_fmt;
    recording_state_t *recording_st      = &recording_state;
    bool recording_enable                = recording_st->enable;
+
+#ifdef HAVE_THREADS
+   /* No frame may be mid-present while the recorder binds to the
+    * driver's readback path. No-op without the wrapper. */
+   video_thread_wait_idle();
+#endif
 
    if (!recording_enable)
       return false;

@@ -374,6 +374,94 @@ static void lane_present_repeat(void)
 }
 
 /* ------------------------------------------------------------------ */
+/* Lane: every marshalled command replies                            */
+/*   Each wrapper entry point that crosses to the video thread is    */
+/*   called once with the wrapper up; a command that never replied   */
+/*   would hang the caller, and one that replied twice would hand    */
+/*   the next caller a stale reply. After all of them the worker     */
+/*   still has to consume frames.                                    */
+/* ------------------------------------------------------------------ */
+
+static void lane_every_command_replies(void)
+{
+   unsigned had = failures;
+   video_driver_state_t *video_st = video_state_get_ptr();
+   const video_driver_t *drv;
+   const video_poke_interface_t *poke = NULL;
+   void *data;
+   unsigned last_hits = 0;
+   unsigned w = 0, h = 0;
+   float hz;
+
+   command_event(CMD_EVENT_MENU_TOGGLE, NULL);
+   set_threaded_via_setting(true);
+   run_frames(5);
+   expect_wrapper(true, "command lane");
+   drv  = video_st->current_video;
+   data = video_st->data;
+   wrapper_frames_since(&last_hits);
+
+   /* video_driver_t */
+   drv->set_nonblock_state(data, true, false, 1);
+   drv->set_nonblock_state(data, false, true, 2);
+   drv->set_nonblock_state(data, false, false, 1);
+   if (drv->set_viewport)
+      drv->set_viewport(data, 640, 480, false, true);
+   if (drv->set_rotation)
+      drv->set_rotation(data, 1), drv->set_rotation(data, 0);
+   if (drv->set_shader)
+      drv->set_shader(data, RARCH_SHADER_NONE, NULL);
+   (void)drv->alive(data);
+   (void)drv->focus(data);
+   (void)drv->has_windowed(data);
+   (void)drv->suppress_screensaver(data, true);
+
+   /* video_poke_interface_t */
+   if (drv->poke_interface)
+      drv->poke_interface(data, &poke);
+   CHECK(poke != NULL, "wrapper has no poke interface");
+   if (poke)
+   {
+      if (poke->set_filtering)       poke->set_filtering(data, 0, true, false);
+      if (poke->get_video_output_size) poke->get_video_output_size(data, &w, &h, NULL, 0);
+      if (poke->get_video_output_prev) poke->get_video_output_prev(data);
+      if (poke->get_video_output_next) poke->get_video_output_next(data);
+      if (poke->set_aspect_ratio)    poke->set_aspect_ratio(data, 0);
+      if (poke->apply_state_changes) poke->apply_state_changes(data);
+      if (poke->set_texture_enable)  poke->set_texture_enable(data, false, false);
+      if (poke->show_mouse)          poke->show_mouse(data, true);
+      if (poke->grab_mouse_toggle)   poke->grab_mouse_toggle(data), poke->grab_mouse_toggle(data);
+      if (poke->set_hdr_menu_nits)   poke->set_hdr_menu_nits(data, 200.0f);
+      if (poke->set_hdr_paper_white_nits) poke->set_hdr_paper_white_nits(data, 200.0f);
+      if (poke->set_hdr_expand_gamut) poke->set_hdr_expand_gamut(data, 1);
+      if (poke->set_hdr_scanlines)   poke->set_hdr_scanlines(data, false);
+      if (poke->set_hdr_subpixel_layout) poke->set_hdr_subpixel_layout(data, 0);
+      if (poke->get_current_shader)  (void)poke->get_current_shader(data);
+      if (poke->get_flags)           (void)poke->get_flags(data);
+      CHECK(poke->get_refresh_rate != NULL, "wrapper does not forward get_refresh_rate");
+      if (poke->get_refresh_rate)
+      {
+         hz = poke->get_refresh_rate(data);
+         CHECK(hz >= 0.0f, "refresh rate %f", hz);
+      }
+      CHECK(poke->present_last != NULL, "wrapper does not forward present_last");
+      if (poke->present_last)
+         (void)poke->present_last(data);
+   }
+
+   run_frames(30);
+   CHECK(wrapper_frames_since(&last_hits) > 0,
+         "worker stopped consuming after the command walk");
+   video_thread_wait_idle();
+
+   set_threaded_via_setting(false);
+   command_event(CMD_EVENT_MENU_TOGGLE, NULL);
+
+   if (failures == had)
+      fprintf(stderr, "[pass] every-command-replies lane\n");
+}
+
+/* ------------------------------------------------------------------ */
 
 int main(int argc, char *argv[])
 {
@@ -456,6 +544,7 @@ int main(int argc, char *argv[])
    lane_toggle_in_game(cycles);
    lane_swap_count();
    lane_present_repeat();
+   lane_every_command_replies();
 
    /* Orderly shutdown: the teardown barriers are part of what is
     * under test. */
