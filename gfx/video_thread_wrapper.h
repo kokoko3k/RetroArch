@@ -174,7 +174,8 @@ typedef struct thread_video
 
    slock_t *lock;
    /* cond_cmd carries two distinct predicates - the command reply
-    * (pkt->type == reply_cmd) and frame consumption (!frame.updated) -
+    * (pkt->type == reply_cmd) and ring progress (frame.pending /
+    * frame.busy changing) -
     * and every signaller uses scond_signal(), which wakes exactly one
     * waiter. There is no broadcast anywhere in the wrapper.
     *
@@ -244,25 +245,44 @@ typedef struct thread_video
 
    bool alpha_update;
 
+   /* Core frames cross to the video thread through a two-slot ring so
+    * the main thread's copy of frame N+1 overlaps the worker's upload
+    * and render of frame N. All ring bookkeeping (tail, pending, busy)
+    * is guarded by 'lock'; slot contents are owned by whichever side
+    * holds the slot - the main thread between claim and publish, the
+    * video thread between claim and completion - and need no lock. */
    struct
    {
-      uint64_t count;
+      /* Protects the menu texture / apply_state_changes handoff, which
+       * the video thread applies from inside its frame call. Not the
+       * ring: the ring is guarded by 'lock'. */
       slock_t *lock;
-      uint8_t *buffer;
-      /* Bytes allocated for 'buffer' at thread_init, from the core's
-       * declared maximum geometry. A core that then hands over a larger
-       * frame than it declared would otherwise be copied past the end. */
+      /* Bytes allocated for each slot buffer at thread_init, from the
+       * core's declared maximum geometry. A core that hands over a
+       * larger frame than it declared is clamped to this. */
       size_t   buffer_size;
-      unsigned width;
-      unsigned height;
-      unsigned pitch;
-      char msg[NAME_MAX_LENGTH];
-      /* Built by the caller (main thread) in video_thread_frame() and
-       * consumed by video_thread_loop().  video_driver_build_info()
-       * reads video_driver_st and runloop_state, both of which the main
-       * thread mutates, so it must not be called from the worker. */
-      video_frame_info_t video_info;
-      bool updated;
+      struct
+      {
+         uint64_t count;
+         uint8_t *buffer;
+         unsigned width;
+         unsigned height;
+         unsigned pitch;
+         char msg[NAME_MAX_LENGTH];
+         /* Built by the main thread in video_thread_frame() and handed
+          * to the driver's frame call by pointer on the video thread.
+          * video_driver_build_info() reads video_driver_st and
+          * runloop_state, both of which the main thread mutates, so it
+          * must not be called from the worker. */
+         video_frame_info_t video_info;
+      } slot[2];
+      /* Slot the video thread claims next. Claiming flips it. */
+      unsigned tail;
+      /* Filled slots not yet claimed by the video thread, 0..2. */
+      unsigned pending;
+      /* The video thread has claimed a slot and is rendering it. While
+       * set, the slot being rendered is tail ^ 1. */
+      bool busy;
       bool within_thread;
    } frame;
 

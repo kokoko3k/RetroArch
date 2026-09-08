@@ -528,7 +528,8 @@ static bool video_thread_handle_packet(
 static void video_thread_loop(void *data)
 {
    thread_packet_t pkt;
-   bool updated;
+   unsigned slot;
+   bool claimed;
    thread_video_t *thr = (thread_video_t*)data;
 
    sthread_setname("ra-video");
@@ -536,10 +537,20 @@ static void video_thread_loop(void *data)
    for (;;)
    {
       slock_lock(thr->lock);
-      while (thr->send_cmd == CMD_VIDEO_NONE && !thr->frame.updated)
+      while (thr->send_cmd == CMD_VIDEO_NONE && !thr->frame.pending)
          scond_wait(thr->cond_thread, thr->lock);
 
-      updated = thr->frame.updated;
+      /* Claim the oldest filled slot before releasing the lock: from
+       * here until completion the slot is this thread's and the main
+       * thread routes new frames to the other one. */
+      claimed = thr->frame.pending > 0;
+      slot    = thr->frame.tail;
+      if (claimed)
+      {
+         thr->frame.tail    = slot ^ 1;
+         thr->frame.pending--;
+         thr->frame.busy    = true;
+      }
 
       /* To avoid race condition where send_cmd is updated
        * right after the switch is checked. */
@@ -550,7 +561,7 @@ static void video_thread_loop(void *data)
       if (video_thread_handle_packet(thr, &pkt))
          return;
 
-      if (updated)
+      if (claimed)
       {
          struct video_viewport vp;
          bool               alive = false;
@@ -575,28 +586,27 @@ static void video_thread_loop(void *data)
          {
             if (thr->driver->frame)
             {
-               video_frame_info_t video_info;
-               bool               ret;
-
-               /* Built by video_driver_frame() on the main thread and
-                * carried across with the frame data.  Do not call
-                * video_driver_build_info() here: it reads video_driver_st
-                * and runloop_state while the main thread writes them. */
-               video_info = thr->frame.video_info;
+               bool ret;
+               video_frame_info_t *video_info = &thr->frame.slot[slot].video_info;
 
                /* video_driver_build_info() resolves userdata from
                 * video_driver_st, and video_thread_free() clears
                 * thread_wrapper_active before this thread
                 * stops, so a frame built inside that window would carry
                 * the thread_video_t wrapper instead of the real driver
-                * data.  This thread knows its own. */
-               video_info.userdata = thr->driver_data;
+                * data.  This thread knows its own. The slot is discarded
+                * after this call, so the driver may scribble on it. */
+               video_info->userdata = thr->driver_data;
 
                ret = thr->driver->frame(thr->driver_data,
-                  thr->frame.buffer, thr->frame.width, thr->frame.height,
-                  thr->frame.count, thr->frame.pitch,
-                  *thr->frame.msg ? thr->frame.msg : NULL,
-                  &video_info);
+                  thr->frame.slot[slot].buffer,
+                  thr->frame.slot[slot].width,
+                  thr->frame.slot[slot].height,
+                  thr->frame.slot[slot].count,
+                  thr->frame.slot[slot].pitch,
+                  *thr->frame.slot[slot].msg
+                     ? thr->frame.slot[slot].msg : NULL,
+                  video_info);
 
                slock_unlock(thr->frame.lock);
 
@@ -634,7 +644,7 @@ static void video_thread_loop(void *data)
           * than letting the main thread read video_driver_st. */
          thr->scale_width   = video_state_get_ptr()->scale_width;
          thr->scale_height  = video_state_get_ptr()->scale_height;
-         thr->frame.updated = false;
+         thr->frame.busy    = false;
          scond_signal(thr->cond_cmd);
          slock_unlock(thr->lock);
       }
@@ -718,6 +728,8 @@ static bool video_thread_frame(void *data, const void *frame_,
       unsigned width, unsigned height, uint64_t frame_count,
       unsigned pitch, const char *msg, video_frame_info_t *video_info)
 {
+   unsigned slot;
+   bool dropped        = false;
    thread_video_t *thr = (thread_video_t*)data;
 
    if (!thr)
@@ -744,9 +756,11 @@ static bool video_thread_frame(void *data, const void *frame_,
          (retro_time_t)roundf(1000000 / video_info->refresh_rate);
       retro_time_t target            = thr->last_time + target_frame_time;
 
-      /* Ideally, use absolute time, but that is only a good idea on POSIX. */
+      /* Pace against the worker claiming the previous frame, not
+       * finishing it: the copy below then overlaps that render.
+       * Ideally, use absolute time, but that is only a good idea on POSIX. */
       VIDEO_THREAD_CMD_WAIT_ENTER(thr);
-      while (thr->frame.updated)
+      while (thr->frame.pending)
       {
          retro_time_t current = cpu_features_get_time_usec();
          retro_time_t delta   = target - current;
@@ -760,17 +774,32 @@ static bool video_thread_frame(void *data, const void *frame_,
       VIDEO_THREAD_CMD_WAIT_LEAVE(thr);
    }
 
-   /* Drop frame if updated flag is still set, as thread is
-    * still working on last frame. */
-   if (!thr->frame.updated)
+   /* Pick the slot to fill. The worker renders tail ^ 1 while busy and
+    * claims tail next, so a slot is free when it is neither. When both
+    * are taken, the newest unclaimed frame is replaced rather than the
+    * new one dropped, and the worker keeps rendering what it holds. */
+   if (!thr->frame.pending)
+      slot = thr->frame.tail;
+   else if (thr->frame.pending == 1 && !thr->frame.busy)
+      slot = thr->frame.tail ^ 1;
+   else
+   {
+      slot = (thr->frame.pending == 2) ? (thr->frame.tail ^ 1) : thr->frame.tail;
+      thr->frame.pending--;
+      thr->miss_count++;
+      dropped = true;
+   }
+
+   slock_unlock(thr->lock);
+
    {
       const uint8_t *src   = (const uint8_t*)frame_;
-      uint8_t       *dst   = thr->frame.buffer;
+      uint8_t       *dst   = thr->frame.slot[slot].buffer;
       unsigned copy_stride = width *
          (thr->info.rgb32 ? sizeof(uint32_t) : sizeof(uint16_t));
-      /* The buffer holds the maximum geometry the core declared at init.
+      /* The slot holds the maximum geometry the core declared at init.
        * A core is free to hand over a bigger frame than that, so publish
-       * only the rows that fit: the worker renders thr->frame.height out
+       * only the rows that fit: the worker renders slot height rows out
        * of this same buffer, so an unclamped height would be read past
        * the end of the allocation whether or not anything was copied
        * into it. A stride too wide for a single row yields zero. */
@@ -783,54 +812,60 @@ static bool video_thread_frame(void *data, const void *frame_,
 
       if (src)
       {
-         int i; /* TODO/FIXME - increment counter never meaningfully used */
-         for (i = 0; i < (int)height; i++, src += pitch, dst += copy_stride)
-            memcpy(dst, src, copy_stride);
+         if (pitch == copy_stride)
+            memcpy(dst, src, (size_t)height * copy_stride);
+         else
+         {
+            unsigned i;
+            for (i = 0; i < height; i++, src += pitch, dst += copy_stride)
+               memcpy(dst, src, copy_stride);
+         }
       }
 
-      thr->frame.updated = true;
-      thr->frame.width   = width;
-      thr->frame.height  = height;
-      thr->frame.count   = frame_count;
-      thr->frame.pitch   = copy_stride;
+      thr->frame.slot[slot].width  = width;
+      thr->frame.slot[slot].height = height;
+      thr->frame.slot[slot].count  = frame_count;
+      thr->frame.slot[slot].pitch  = copy_stride;
 
       /* Hand the caller's video_frame_info_t across with the frame data.
        * It was built by video_driver_frame() on this thread; rebuilding
        * it on the worker races the main thread's writes to
        * video_driver_st and runloop_state. */
       if (video_info)
-         thr->frame.video_info = *video_info;
+         thr->frame.slot[slot].video_info = *video_info;
 
       if (msg)
-         strlcpy(thr->frame.msg, msg, sizeof(thr->frame.msg));
+         strlcpy(thr->frame.slot[slot].msg, msg,
+               sizeof(thr->frame.slot[slot].msg));
       else
-         *thr->frame.msg = '\0';
+         *thr->frame.slot[slot].msg = '\0';
+   }
 
-      scond_signal(thr->cond_thread);
+   slock_lock(thr->lock);
+   thr->frame.pending++;
+   scond_signal(thr->cond_thread);
 
 #ifdef HAVE_MENU
-      if (thr->texture.enable)
+   if (thr->texture.enable)
+   {
+      /* Unbounded wait that may run on the main thread; the worker can
+       * marshal main-thread-only work (e.g. Vulkan swapchain recreation
+       * on resize) via cocoa_main_thread_sync() before completing the
+       * frame, so drain the trampoline while waiting. The timed
+       * frame-pacing wait above needs no such treatment: it breaks after
+       * at most one frame period and the main runloop then drains common
+       * modes. */
+      VIDEO_THREAD_CMD_WAIT_ENTER(thr);
+      do
       {
-         /* Unbounded wait that may run on the main thread; the worker can
-          * marshal main-thread-only work (e.g. Vulkan swapchain recreation
-          * on resize) via cocoa_main_thread_sync() before clearing
-          * frame.updated, so drain the trampoline while waiting. The timed
-          * frame-pacing wait above needs no such treatment: it breaks after
-          * at most one frame period and the main runloop then drains common
-          * modes. */
-         VIDEO_THREAD_CMD_WAIT_ENTER(thr);
-         do
-         {
-            if (!video_thread_pump_wait(thr->cond_cmd, thr->lock))
-               scond_wait(thr->cond_cmd, thr->lock);
-         } while (thr->frame.updated);
-         VIDEO_THREAD_CMD_WAIT_LEAVE(thr);
-      }
-#endif
-      thr->hit_count++;
+         if (!video_thread_pump_wait(thr->cond_cmd, thr->lock))
+            scond_wait(thr->cond_cmd, thr->lock);
+      } while (thr->frame.pending || thr->frame.busy);
+      VIDEO_THREAD_CMD_WAIT_LEAVE(thr);
    }
-   else
-      thr->miss_count++;
+#endif
+   if (!dropped)
+      thr->hit_count++;
 
    slock_unlock(thr->lock);
 
@@ -867,25 +902,30 @@ static bool video_thread_init(thread_video_t *thr,
       return false;
 
    {
+      unsigned i;
       size_t max_size        = info.input_scale * RARCH_SCALE_BASE;
       max_size              *= max_size;
       max_size              *= info.rgb32 ?
          sizeof(uint32_t) : sizeof(uint16_t);
 
-      /* The main thread copies every core frame in here and the video
-       * thread reads it back for upload; a cache-line start keeps both
-       * copies on aligned rows for the usual pitches. */
+      /* The main thread copies core frames in here and the video
+       * thread reads them back for upload; a cache-line start keeps
+       * both copies on aligned rows for the usual pitches. Two slots so
+       * the copy of one frame overlaps the upload of the other. */
+      for (i = 0; i < 2; i++)
+      {
 #ifdef _3DS
-      thr->frame.buffer      = linearMemAlign(max_size, 0x80);
+         thr->frame.slot[i].buffer = linearMemAlign(max_size, 0x80);
 #else
-      thr->frame.buffer      = (uint8_t*)memalign_alloc(64, max_size);
+         thr->frame.slot[i].buffer = (uint8_t*)memalign_alloc(64, max_size);
 #endif
-      if (!thr->frame.buffer)
-         return false;
+         if (!thr->frame.slot[i].buffer)
+            return false;
+
+         memset(thr->frame.slot[i].buffer, 0x80, max_size);
+      }
 
       thr->frame.buffer_size = max_size;
-
-      memset(thr->frame.buffer, 0x80, max_size);
    }
 
    thr->input                = input;
@@ -1025,9 +1065,11 @@ static void video_thread_free(void *data)
 
       free(thr->texture.frame);
 #ifdef _3DS
-      linearFree(thr->frame.buffer);
+      linearFree(thr->frame.slot[0].buffer);
+      linearFree(thr->frame.slot[1].buffer);
 #else
-      memalign_free(thr->frame.buffer);
+      memalign_free(thr->frame.slot[0].buffer);
+      memalign_free(thr->frame.slot[1].buffer);
 #endif
       free(thr->alpha_mod);
 
@@ -1797,7 +1839,7 @@ void video_thread_wait_idle(void)
 
    slock_lock(thr->lock);
    VIDEO_THREAD_CMD_WAIT_ENTER(thr);
-   while (thr->frame.updated)
+   while (thr->frame.pending || thr->frame.busy)
       scond_wait(thr->cond_cmd, thr->lock);
    VIDEO_THREAD_CMD_WAIT_LEAVE(thr);
    slock_unlock(thr->lock);
