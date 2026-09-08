@@ -378,6 +378,8 @@ typedef struct gfx_thumb_anim_job
 {
    struct gfx_thumb_anim_job *next;  /* FIFO link (owned by the queue) */
    void     *stream;                 /* borrowed from the thumbnail    */
+   void     *sess;                   /* borrowed gfx_anim_preview_t,
+                                        NULL when not windowed        */
    uint32_t *frame;                  /* job-owned upload-ready pixels  */
    unsigned  width, height;
    int       duration_ms;            /* of the READY frame             */
@@ -414,6 +416,18 @@ static bool gfx_thumbnail_anim_job_step(gfx_thumb_anim_job_t *job)
     * fallback conversion. */
    bool native_order         = image_transfer_anim_stream_set_argb(
          job->stream, type, job->use_rgba ? 0 : 1);
+
+   /* The window feed runs HERE, on the thread that decodes, not on
+    * the poll.  It reads the demuxer's cursor and stores its bound,
+    * and the decoder writes the one and reads the other on every
+    * packet: from the poll those were unsynchronised accesses to the
+    * stream while a job was RUNNING (TSan, gfx_thumbnail_anim harness,
+    * the moment a windowed WEBP gave the feed a cursor to read).  On
+    * this thread the stream and its transfer have one owner, which is
+    * the window's contract.  An I/O failure while extending means the
+    * decoder would hit the wall and loop early: end the animation. */
+   if (job->sess && !gfx_anim_preview_feed((gfx_anim_preview_t*)job->sess))
+      return false;
 
    if (!(frame = image_transfer_anim_stream_next(job->stream, type,
          &duration_ms)))
@@ -975,21 +989,14 @@ void gfx_thumbnail_animate(gfx_thumbnail_t *thumbnail)
    now  = cpu_features_get_time_usec();
    type = (enum image_type_enum)thumbnail->anim_type;
 
-   /* Windowed playback: the shared session keeps the committed range
-    * straddling the decoder's byte frontier and feeds the preview
-    * audio's window (gfx_anim_preview_feed / _audio_feed). An I/O
-    * failure while extending means the decoder would hit the
-    * end-of-data wall and loop early: keep the still. */
+   /* Windowed playback: the shared session feeds the preview audio's
+    * window from here (its own transfer, consumed by the mixer under
+    * the mixer's lock).  The VIDEO window is fed by whichever thread
+    * decodes - the worker in gfx_thumbnail_anim_job_step, or this one
+    * in the synchronous path below - because the feed and the decoder
+    * share the demuxer's cursor and bound. */
    if (thumbnail->anim_sess)
-   {
-      gfx_anim_preview_t *sess = (gfx_anim_preview_t*)thumbnail->anim_sess;
-      if (!gfx_anim_preview_feed(sess))
-      {
-         gfx_thumbnail_anim_close(thumbnail);
-         return;
-      }
-      gfx_anim_preview_audio_feed(sess);
-   }
+      gfx_anim_preview_audio_feed((gfx_anim_preview_t*)thumbnail->anim_sess);
 
    if (thumbnail->anim_read_pending)
    {
@@ -1103,6 +1110,8 @@ void gfx_thumbnail_animate(gfx_thumbnail_t *thumbnail)
          }
          j0->stream     = thumbnail->anim;
          j1->stream     = thumbnail->anim;
+         j0->sess       = thumbnail->anim_sess;
+         j1->sess       = thumbnail->anim_sess;
          j0->type       = thumbnail->anim_type;
          j1->type       = thumbnail->anim_type;
          j0->width      = anim_w;
@@ -1210,6 +1219,17 @@ void gfx_thumbnail_animate(gfx_thumbnail_t *thumbnail)
          & VIDEO_FLAG_USE_RGBA) ? true : false;
    sync_native_order = image_transfer_anim_stream_set_argb(
          thumbnail->anim, type, sync_use_rgba ? 0 : 1);
+
+   /* Keep the window straddling the decoder (see the worker's step
+    * for why this sits next to the decode).  An I/O failure while
+    * extending means the decoder would hit the wall and loop early:
+    * keep the still. */
+   if (thumbnail->anim_sess && !gfx_anim_preview_feed(
+            (gfx_anim_preview_t*)thumbnail->anim_sess))
+   {
+      gfx_thumbnail_anim_close(thumbnail);
+      return;
+   }
 
    if (!(frame = image_transfer_anim_stream_next(thumbnail->anim, type,
          &duration_ms)))
