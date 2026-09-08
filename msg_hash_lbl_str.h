@@ -1682,6 +1682,7 @@
 #define MENU_ENUM_LABEL_VIDEO_VI_WIDTH_STR "video_vi_width"
 #define MENU_ENUM_LABEL_VIDEO_VSYNC_STR "video_vsync"
 #define MENU_ENUM_LABEL_VIDEO_WAITABLE_SWAPCHAINS_STR "video_waitable_swapchains"
+#define MENU_ENUM_LABEL_VIDEO_THREADED_PRESENT_REPEAT_STR "video_threaded_present_repeat"
 #define MENU_ENUM_LABEL_VIDEO_WIIU_PREFER_DRC_STR "video_wiiu_prefer_drc"
 #define MENU_ENUM_LABEL_VIDEO_WINDOWED_FULLSCREEN_STR "video_windowed_fullscreen"
 #define MENU_ENUM_LABEL_VIDEO_WINDOWED_MODE_SETTINGS_STR "video_windowed_mode_settings"

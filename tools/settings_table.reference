@@ -66,6 +66,7 @@ bool	video_windowed_fullscreen	1	1
 bool	video_vsync	1	1
 bool	video_scan_subframes	1	0
 bool	video_waitable_swapchains	1	1
+bool	video_threaded_present_repeat	1	0
 bool	video_hard_sync	1	0
 bool	menu_throttle_framerate	1	1
 bool	video_ctx_scaling	1	0
@@ -251,7 +252,7 @@ bool	input_auto_mouse_grab	1	1
 bool	microphone_enable	1	1
 bool	audio_sync	1	1
 bool	audio_threaded_pipeline	1	1
-bool	audio_thread_priority	1	0
+bool	audio_thread_priority	1	1
 bool	audio_sink_rate_estimation	1	1
 bool	audio_enable	1	1
 bool	ui_menubar_enable	1	1
@@ -716,6 +717,7 @@ bool	video_windowed_fullscreen	1	1
 bool	video_vsync	1	1
 bool	video_scan_subframes	1	0
 bool	video_waitable_swapchains	1	1
+bool	video_threaded_present_repeat	1	0
 bool	video_hard_sync	1	0
 bool	menu_throttle_framerate	1	1
 bool	video_ctx_scaling	1	0
@@ -901,7 +903,7 @@ bool	input_auto_mouse_grab	1	0
 bool	microphone_enable	1	1
 bool	audio_sync	1	1
 bool	audio_threaded_pipeline	1	1
-bool	audio_thread_priority	1	0
+bool	audio_thread_priority	1	1
 bool	audio_sink_rate_estimation	1	1
 bool	audio_enable	1	1
 bool	ui_menubar_enable	1	1
@@ -1362,6 +1364,7 @@ bool	video_windowed_fullscreen	1	1
 bool	video_vsync	1	1
 bool	video_scan_subframes	1	0
 bool	video_waitable_swapchains	1	1
+bool	video_threaded_present_repeat	1	0
 bool	video_hard_sync	1	0
 bool	menu_throttle_framerate	1	1
 bool	video_ctx_scaling	1	0
@@ -1556,7 +1559,7 @@ bool	input_auto_mouse_grab	1	0
 bool	microphone_enable	1	1
 bool	audio_sync	1	1
 bool	audio_threaded_pipeline	1	1
-bool	audio_thread_priority	1	0
+bool	audio_thread_priority	1	1
 bool	audio_sink_rate_estimation	1	1
 bool	audio_enable	1	1
 bool	ui_menubar_enable	1	1

@@ -57,6 +57,11 @@ S_BOOL(video_waitable_swapchains, VIDEO_WAITABLE_SWAPCHAINS,
       DEFAULT_WAITABLE_SWAPCHAINS, SD_FLAG_CMD_APPLY_AUTO, SDESC_FLG_REFRESH, CMD_EVENT_REINIT,
       "Waitable Swapchains",
       "Hard-synchronize the CPU and GPU. Reduces latency at the cost of performance.")
+S_BOOL(video_threaded_present_repeat, VIDEO_THREADED_PRESENT_REPEAT,
+      "video_threaded_present_repeat",
+      DEFAULT_VIDEO_THREADED_PRESENT_REPEAT, SD_FLAG_NONE, 0, CMD_EVENT_NONE,
+      "Threaded Video Frame Repeat",
+      "With Threaded Video, keep presenting the last frame at the display's refresh rate while the core falls behind, instead of leaving the previous present on screen. Keeps Black Frame Insertion and refresh-rate shader effects steady through core stutter. Needs a video driver that can repeat a frame (Vulkan, Direct3D 11); not applied with shader sub-frames.")
 S_INT(video_max_frame_latency, VIDEO_MAX_FRAME_LATENCY,
       "video_max_frame_latency",
       DEFAULT_MAX_FRAME_LATENCY, SD_FLAG_CMD_APPLY_AUTO, SDESC_RANGE_MINMAX, CMD_EVENT_REINIT, -1, MAXIMUM_MAX_FRAME_LATENCY, 1, -1, setting_action_ok_uint, NULL,

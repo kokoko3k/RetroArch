@@ -1913,7 +1913,6 @@ static struct config_bool_setting *populate_settings_bool(
    SETTING_BOOL("video_allow_rotate",            &settings->bools.video_allow_rotate, true, DEFAULT_ALLOW_ROTATE, false);
    SETTING_BOOL("video_force_aspect",            &settings->bools.video_force_aspect, true, DEFAULT_FORCE_ASPECT, false);
    SETTING_BOOL("video_threaded",                video_driver_get_threaded(), true, DEFAULT_VIDEO_THREADED, false);
-   SETTING_BOOL("video_threaded_present_repeat", &settings->bools.video_threaded_present_repeat, true, DEFAULT_VIDEO_THREADED_PRESENT_REPEAT, false);
    SETTING_BOOL("video_shared_context",          &settings->bools.video_shared_context, true, DEFAULT_VIDEO_SHARED_CONTEXT, false);
    /* Rows with no default in the configuration table. The generated
     * grammar always applies a default, so these are registered here
