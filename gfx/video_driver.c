@@ -5716,6 +5716,8 @@ void video_driver_frame(const void *data, unsigned width,
       audio_driver_state_t *audio_st         = audio_state_get_ptr();
       audio_statistics_t audio_stats;
       double stddev                          = 0.0;
+      /* The driver's name, not the wrapper's under threaded video. */
+      const char *video_ident                = video_driver_get_ident();
       float font_size_ratio                  = (float)(DEFAULT_FONT_SIZE / video_info.font_size);
       float scale                            = (float)video_info.height / (video_info.font_size * 30)
             * 0.50f * font_size_ratio;
@@ -5783,7 +5785,7 @@ void video_driver_frame(const void *data, unsigned width,
                av_info->timing.fps,
                av_info->timing.sample_rate,
                (audio_st->stat_core_is_float) ? "FLOAT" : "INT16",
-               (vid && vid->ident) ? vid->ident : "n/a",
+               video_ident ? video_ident : "n/a",
                pixel_format_name(video_st->pix_fmt),
                video_info.width,
                video_info.height,
