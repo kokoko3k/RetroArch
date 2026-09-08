@@ -266,6 +266,12 @@ typedef struct vk
 #ifdef VULKAN_HDR_SWAPCHAIN
    VkRenderPass readback_render_pass;
    struct vk_image offscreen_buffer;
+   /* Copy of the last presented backbuffer, taken at the end of a
+    * frame() that asked for it (retain_output), sized to the swapchain
+    * it was copied from. Lives in TRANSFER_SRC_OPTIMAL between uses. */
+   struct vk_image retained;
+   unsigned retained_width;
+   unsigned retained_height;
    struct vk_image readback_image;
 #endif /* VULKAN_HDR_SWAPCHAIN */
 
@@ -5166,6 +5172,8 @@ static void vulkan_deinit_menu(vk_t *vk)
 }
 
 #ifdef VULKAN_HDR_SWAPCHAIN
+static void vulkan_retained_free(vk_t *vk);
+
 static void vulkan_destroy_hdr_buffer(VkDevice device, struct vk_image *img)
 {
    vkDestroyImageView(device, img->view, NULL);
@@ -5252,6 +5260,7 @@ static void vulkan_free(void *data)
          vulkan_destroy_buffer(vk->context->device, &vk->hdr.ubo_menu);
          vulkan_destroy_hdr_buffer(vk->context->device, &vk->offscreen_buffer);
          vulkan_destroy_hdr_buffer(vk->context->device, &vk->readback_image);
+         vulkan_retained_free(vk);
          vulkan_deinit_hdr_readback_render_pass(vk);
          video_driver_set_disp_flags(video_driver_get_disp_flags() & ~(VIDEO_FLAG_HDR_SUPPORT | VIDEO_FLAG_HDR10_SUPPORT | VIDEO_FLAG_SCRGB_SUPPORT));
       }
@@ -6551,6 +6560,187 @@ static void vulkan_readback(vk_t *vk, struct vk_image *readback_image)
          VK_PIPELINE_STAGE_TRANSFER_BIT,
          VK_PIPELINE_STAGE_HOST_BIT, 0,
          1, &barrier, 0, NULL, 0, NULL);
+}
+
+static void vulkan_init_render_target(struct vk_image* image,
+      uint32_t width, uint32_t height, VkFormat format,
+      VkRenderPass render_pass, vulkan_context_t* ctx);
+static void vulkan_destroy_hdr_buffer(VkDevice device, struct vk_image *img);
+
+static void vulkan_retained_free(vk_t *vk)
+{
+   if (vk->retained.image != VK_NULL_HANDLE)
+      vulkan_destroy_hdr_buffer(vk->context->device, &vk->retained);
+   memset(&vk->retained, 0, sizeof(vk->retained));
+   vk->retained_width  = 0;
+   vk->retained_height = 0;
+}
+
+/* Records, into the frame's command buffer, a copy of the backbuffer
+ * (already in PRESENT_SRC_KHR) into the retained image, and leaves both
+ * where the rest of the frame expects them. The retained image is
+ * (re)created to match the swapchain when it does not. */
+static void vulkan_retain_backbuffer(vk_t *vk, struct vk_image *backbuffer)
+{
+   VkImageCopy region;
+   unsigned width           = vk->context->swapchain_width;
+   unsigned height          = vk->context->swapchain_height;
+   VkImageLayout old_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+
+   if (     vk->retained.image == VK_NULL_HANDLE
+         || vk->retained_width  != width
+         || vk->retained_height != height)
+   {
+      vulkan_retained_free(vk);
+      vulkan_init_render_target(&vk->retained, width, height,
+            vk->context->swapchain_format, vk->render_pass, vk->context);
+      if (vk->retained.image == VK_NULL_HANDLE)
+         return;
+      vk->retained_width  = width;
+      vk->retained_height = height;
+      old_layout          = VK_IMAGE_LAYOUT_UNDEFINED;
+   }
+
+   VULKAN_IMAGE_LAYOUT_TRANSITION(vk->cmd, backbuffer->image,
+         VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+         VK_ACCESS_MEMORY_READ_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+         VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+   VULKAN_IMAGE_LAYOUT_TRANSITION(vk->cmd, vk->retained.image,
+         old_layout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+         VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+         VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+
+   memset(&region, 0, sizeof(region));
+   region.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+   region.srcSubresource.layerCount = 1;
+   region.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+   region.dstSubresource.layerCount = 1;
+   region.extent.width              = width;
+   region.extent.height             = height;
+   region.extent.depth              = 1;
+   vkCmdCopyImage(vk->cmd,
+         backbuffer->image,  VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+         vk->retained.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+         1, &region);
+
+   VULKAN_IMAGE_LAYOUT_TRANSITION(vk->cmd, vk->retained.image,
+         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+         VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+         VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+   VULKAN_IMAGE_LAYOUT_TRANSITION(vk->cmd, backbuffer->image,
+         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+         VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_MEMORY_READ_BIT,
+         VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+}
+
+/* One more swap of the retained image: copy it into the swapchain image
+ * acquired by the previous swap_buffers() and present. Same submit shape
+ * as vulkan_inject_black_frame(), with the copy where the clear is. */
+static bool vulkan_present_last(void *data)
+{
+   VkSubmitInfo submit_info;
+   VkCommandBufferBeginInfo begin_info;
+   VkImageCopy region;
+   vk_t *vk                            = (vk_t*)data;
+   unsigned frame_index;
+   unsigned swapchain_index;
+   struct vk_per_frame *chain;
+   struct vk_image *backbuffer;
+
+   if (     !vk
+         || vk->retained.image == VK_NULL_HANDLE
+         || !(vk->context->flags & VK_CTX_FLAG_HAS_ACQUIRED_SWAPCHAIN)
+         || vk->retained_width  != vk->context->swapchain_width
+         || vk->retained_height != vk->context->swapchain_height)
+      return false;
+
+   frame_index                         = vk->context->current_frame_index;
+   swapchain_index                     = vk->context->current_swapchain_index;
+   chain                               = &vk->swapchain[frame_index];
+   backbuffer                          = &vk->backbuffers[swapchain_index];
+   if (backbuffer->image == VK_NULL_HANDLE)
+      return false;
+
+   vk->chain                           = chain;
+   vk->cmd                             = chain->cmd;
+
+   begin_info.sType                    = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+   begin_info.pNext                    = NULL;
+   begin_info.flags                    = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+   begin_info.pInheritanceInfo         = NULL;
+   vkResetCommandBuffer(vk->cmd, 0);
+   vkBeginCommandBuffer(vk->cmd, &begin_info);
+
+   VULKAN_IMAGE_LAYOUT_TRANSITION(vk->cmd, backbuffer->image,
+         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+         0, VK_ACCESS_TRANSFER_WRITE_BIT,
+         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+         VK_PIPELINE_STAGE_TRANSFER_BIT);
+
+   memset(&region, 0, sizeof(region));
+   region.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+   region.srcSubresource.layerCount = 1;
+   region.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+   region.dstSubresource.layerCount = 1;
+   region.extent.width              = vk->retained_width;
+   region.extent.height             = vk->retained_height;
+   region.extent.depth              = 1;
+   vkCmdCopyImage(vk->cmd,
+         vk->retained.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+         backbuffer->image,  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+         1, &region);
+
+   VULKAN_IMAGE_LAYOUT_TRANSITION(vk->cmd, backbuffer->image,
+         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+         VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_MEMORY_READ_BIT,
+         VK_PIPELINE_STAGE_TRANSFER_BIT,
+         VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+
+   vkEndCommandBuffer(vk->cmd);
+
+   submit_info.sType                   = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+   submit_info.pNext                   = NULL;
+   submit_info.waitSemaphoreCount      = 0;
+   submit_info.pWaitSemaphores         = NULL;
+   submit_info.pWaitDstStageMask       = NULL;
+   submit_info.commandBufferCount      = 1;
+   submit_info.pCommandBuffers         = &vk->cmd;
+   submit_info.signalSemaphoreCount    = 0;
+   submit_info.pSignalSemaphores       = NULL;
+
+   if (vk->context->swapchain_semaphores[swapchain_index] != VK_NULL_HANDLE)
+   {
+      submit_info.signalSemaphoreCount = 1;
+      submit_info.pSignalSemaphores    = &vk->context->swapchain_semaphores[swapchain_index];
+   }
+
+   if (vk->context->swapchain_acquire_semaphore != VK_NULL_HANDLE)
+   {
+      static const VkPipelineStageFlags wait_stage        =
+         VK_PIPELINE_STAGE_TRANSFER_BIT;
+
+      vk->context->swapchain_wait_semaphores[frame_index] =
+         vk->context->swapchain_acquire_semaphore;
+      vk->context->swapchain_acquire_semaphore            = VK_NULL_HANDLE;
+      submit_info.waitSemaphoreCount                      = 1;
+      submit_info.pWaitSemaphores                         = &vk->context->swapchain_wait_semaphores[frame_index];
+      submit_info.pWaitDstStageMask                       = &wait_stage;
+   }
+
+#ifdef HAVE_THREADS
+   slock_lock(vk->context->queue_lock);
+#endif
+   vkQueueSubmit(vk->context->queue, 1,
+         &submit_info, vk->context->swapchain_fences[frame_index]);
+   vk->context->swapchain_fences_signalled[frame_index] = true;
+#ifdef HAVE_THREADS
+   slock_unlock(vk->context->queue_lock);
+#endif
+
+   if (vk->ctx_driver->swap_buffers)
+      vk->ctx_driver->swap_buffers(vk->ctx_data);
+
+   return true;
 }
 
 static void vulkan_inject_black_frame(vk_t *vk, video_frame_info_t *video_info)
@@ -7918,6 +8108,11 @@ static bool vulkan_frame(void *data, const void *frame,
       }
    }
 
+   if (     video_info->retain_output
+         && (backbuffer->image != VK_NULL_HANDLE)
+         && (vk->context->flags & VK_CTX_FLAG_HAS_ACQUIRED_SWAPCHAIN))
+      vulkan_retain_backbuffer(vk, backbuffer);
+
    if (    waits_for_semaphores
        && (vk->hw.src_queue_family != VK_QUEUE_FAMILY_IGNORED)
        && (vk->hw.src_queue_family != vk->context->graphics_queue_index))
@@ -8059,6 +8254,7 @@ static bool vulkan_frame(void *data, const void *frame,
 #endif
          vulkan_destroy_hdr_buffer(vk->context->device, &vk->offscreen_buffer);
          vulkan_destroy_hdr_buffer(vk->context->device, &vk->readback_image);
+         vulkan_retained_free(vk);
       }
       else
          vk->context->flags &= ~VK_CTX_FLAG_HDR_ENABLE;
@@ -9022,7 +9218,8 @@ static const video_poke_interface_t vulkan_poke_interface = {
    NULL, /* set_hdr_subpixel_layout */
 #endif /* VULKAN_HDR_SWAPCHAIN */
    vulkan_supports_texture_format,
-   vulkan_load_texture_compressed
+   vulkan_load_texture_compressed,
+   vulkan_present_last
 };
 
 static void vulkan_get_poke_interface(void *data,

@@ -3972,6 +3972,7 @@ void video_driver_build_info(video_frame_info_t *video_info)
    video_info->shader_subframes            = settings->uints.video_shader_subframes;
    video_info->current_subframe            = 0;
    video_info->swap_count                  = video_st->swap_count;
+   video_info->retain_output               = false;
    video_info->scan_subframes              = settings->bools.video_scan_subframes;
    video_info->hard_sync                   = settings->bools.video_hard_sync;
    video_info->hard_sync_frames            = settings->uints.video_hard_sync_frames;

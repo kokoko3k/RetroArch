@@ -499,6 +499,10 @@ typedef struct video_frame_info
    bool overlay_behind_menu;
    bool scan_subframes;
    bool shader_active;
+   /* Ask the driver to keep a copy of what this frame put on screen,
+    * so a later poke->present_last() can show it again without
+    * re-rendering. Off unless a presenter is going to repeat frames. */
+   bool retain_output;
 } video_frame_info_t;
 
 typedef void (*update_window_title_cb)(void*);
@@ -722,6 +726,14 @@ typedef struct video_poke_interface
    uintptr_t (*load_texture_compressed)(void *video_data,
          const struct texture_compressed *tc, bool threaded,
          enum texture_filter_type filter_type);
+
+   /* Present the output retained by the last frame() that ran with
+    * video_frame_info_t::retain_output set, again, as one more swap:
+    * no shader chain, no menu, no OSD, a copy into the next swapchain
+    * image and a present. Returns false when there is nothing retained
+    * or nothing to present to. Drivers without a cheap way to do this
+    * leave it NULL. */
+   bool (*present_last)(void *data);
 } video_poke_interface_t;
 
 /* msg is for showing a message on the screen
