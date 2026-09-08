@@ -4019,6 +4019,14 @@ static unsigned gl2_present_last(void *data)
    return done;
 }
 
+static retro_time_t gl2_get_last_present_time(void *data)
+{
+   gl2_t *gl = (gl2_t*)data;
+   if (gl && gl->ctx_driver && gl->ctx_driver->last_present_time)
+      return gl->ctx_driver->last_present_time(gl->ctx_data);
+   return 0;
+}
+
 static bool gl2_frame(void *data, const void *frame,
       unsigned frame_width, unsigned frame_height,
       uint64_t frame_count,
@@ -6306,7 +6314,7 @@ static const video_poke_interface_t gl2_poke_interface = {
    gl2_supports_texture_format,
    gl2_load_texture_compressed,
    gl2_present_last,
-   NULL  /* get_last_present_time */
+   gl2_get_last_present_time
 };
 
 static void gl2_get_poke_interface(void *data,

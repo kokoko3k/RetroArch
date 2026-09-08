@@ -646,6 +646,13 @@ typedef struct gfx_ctx_driver
     * Placed last so drivers using positional initializers leave it
     * NULL without shifting any other vtable slot. */
    bool (*presentable)(void *data);
+
+   /* When the most recent swap reached the display, in microseconds on
+    * the clock cpu_features_get_time_usec() keeps; 0 when the context
+    * cannot say. Never blocks. Read by the video driver's
+    * get_last_present_time() poke for the presenter. Also placed last,
+    * for the same reason as presentable. */
+   retro_time_t (*last_present_time)(void *data);
 } gfx_ctx_driver_t;
 
 typedef struct gfx_ctx_mode
