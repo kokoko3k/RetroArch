@@ -1595,16 +1595,20 @@ typedef struct rh264_cbf_s {
    int cbpLuma;    /* coded_block_pattern luma (4 bits)           */
    int cbpChroma;  /* coded_block_pattern chroma (0/1/2)          */
    int lumaDC;     /* I16 luma-DC cbf                             */
-   int luma[16];   /* per-4x4 luma cbf (raster in-MB)             */
-   int cDC[2];     /* chroma DC cbf [cb,cr]                       */
-   int cAC[2][8];  /* chroma AC cbf [cb,cr][blk]; 8 for 4:2:2     */
    int t8;         /* luma_transform_size_8x8_flag                */
    int pcm;        /* I_PCM: every coded_block_flag reads as 1    */
+   int cDC[2];     /* chroma DC cbf [cb,cr]                       */
+   /* The per-block flags are bytes: a slice reader keeps three or
+    * four of these on its stack (current, left, top, dummy), and as
+    * ints the 4:4:4 additions below pushed the CABAC B slice reader
+    * past the 2 KiB frame budget of the console thread stacks. */
+   uint8_t luma[16];   /* per-4x4 luma cbf (raster in-MB)         */
+   uint8_t cAC[2][8];  /* chroma AC cbf [cb,cr][blk]; 8 for 4:2:2 */
    /* 4:4:4: Cb and Cr carry luma-shaped coded_block_flags of their
     * own (ctxBlockCat 6..13); an 8x8 block's flag is replicated into
     * its four 4x4 entries, as luma[] does. */
-   int cbDC, crDC;
-   int cb[16], cr[16];
+   uint8_t cbDC, crDC;
+   uint8_t cb[16], cr[16];
 } rh264_cbf;
 
 typedef struct {
@@ -1623,6 +1627,11 @@ typedef struct {
    struct rh264_cbf_s *scr_row, *scr_toprow;
    uint8_t *scr_skiprow, *scr_topskip, *scr_typerow, *scr_toptype;
    int16_t *scr_am0, *scr_am1;
+   /* bi-prediction temporaries (two lists x three planes, 16x16 each):
+    * off the stack because the B slice reader inlines the block
+    * predictor, and 1.5 KB of locals there breached the 2 KiB frame
+    * budget for the 8 KiB console thread stacks */
+   uint8_t *scr_bipred;
    uint8_t *Yb,*Ub,*Vb;
    int ysb,csb,mbh_frame,field;
    int mbaff;             /* macroblock pairs, scanned two rows at a time */
@@ -5586,9 +5595,10 @@ static void rh264_b_pred_block(rh264_frame *f, const rh264_bctx *bc,
    if (r0 >= 0 && r1 >= 0)
    {
       /* chroma temporaries hold 8x8 for 4:2:0, 8x16 for 4:2:2 and
-       * 16x16 (stride 16) for 4:4:4 */
-      uint8_t t0y[256], t0u[256], t0v[256];
-      uint8_t t1y[256], t1u[256], t1v[256];
+       * 16x16 (stride 16) for 4:4:4; all six live in the frame's
+       * scratch arena (rh264_frame.scr_bipred) rather than on the stack */
+      uint8_t *t0y = f->scr_bipred,       *t0u = t0y + 256, *t0v = t0y + 512;
+      uint8_t *t1y = f->scr_bipred + 768, *t1u = t1y + 256, *t1v = t1y + 512;
       int x, y, c;
       int c444 = f->c444;
       int c422 = (f->cmbh == 16) && !c444;
@@ -6920,7 +6930,7 @@ static int rh264_frame_alloc(rh264_frame *f, const rh264_sps *sps,
    size_t grid, mbs, mvlen, o_nzl, o_nzc0, o_nzc1, o_mbqp, o_mbt8,
           o_mbslice, o_mvg, o_mvg2, meta_len;
    size_t rowlen, amlen, o_row, o_toprow, o_skiprow, o_topskip,
-          o_typerow, o_toptype, o_am0, o_am1;
+          o_typerow, o_toptype, o_am0, o_am1, o_bipred;
    rh264_frame_free(f);
    f->w = sps->frame_width;  f->h = sps->frame_height;
    f->cropx = sps->crop_x;   f->cropy = sps->crop_y;
@@ -6960,7 +6970,8 @@ static int rh264_frame_alloc(rh264_frame *f, const rh264_sps *sps,
    o_toptype = RH264_ARENA_NEXT(o_typerow, with_scratch ? (size_t)mbw + 2 : 0);
    o_am0     = RH264_ARENA_NEXT(o_toptype, with_scratch ? (size_t)mbw + 2 : 0);
    o_am1     = RH264_ARENA_NEXT(o_am0,     amlen);
-   meta_len  = RH264_ARENA_NEXT(o_am1,     amlen);
+   o_bipred  = RH264_ARENA_NEXT(o_am1,     amlen);
+   meta_len  = RH264_ARENA_NEXT(o_bipred,  with_scratch ? (size_t)6 * 256 : 0);
 
    f->planes = (uint8_t*)calloc(plane_len, 1);
    f->meta   = (uint8_t*)calloc(meta_len, 1);
@@ -6995,6 +7006,7 @@ static int rh264_frame_alloc(rh264_frame *f, const rh264_sps *sps,
       f->scr_toptype = f->meta + o_toptype;
       f->scr_am0     = (int16_t*)(f->meta + o_am0);
       f->scr_am1     = (int16_t*)(f->meta + o_am1);
+      f->scr_bipred  = f->meta + o_bipred;
    }
    return 0;
 }
@@ -7935,8 +7947,8 @@ static const uint8_t rh264_sig_cdc422[8]={0,0,1,1,2,2,2,2};
  * neighbour as 1, anything else as 0.  'blk' points at the plane's
  * per-4x4 flags (an 8x8's flag replicated into its four entries). */
 static int rh264_cbf8_ctx(int b8, int cbp_luma, int cur_t8,
-      const int *cblk, const rh264_cbf *L, const int *lblk,
-      const rh264_cbf *U, const int *ublk, int have_left, int have_up,
+      const uint8_t *cblk, const rh264_cbf *L, const uint8_t *lblk,
+      const rh264_cbf *U, const uint8_t *ublk, int have_left, int have_up,
       int intra)
 {
    int bx8 = b8 & 1, by8 = b8 >> 1, a, b;
@@ -8114,9 +8126,9 @@ static int rh264_cabac_intra_plane444(rh264_cabac *cb, rh264_frame *f,
    int stride = f->cstride;
    uint8_t *P = (comp ? f->V : f->U) + (size_t)mby*16*stride + mbx*16;
    uint8_t *nz = f->nzC[comp];
-   int *cblk = comp ? cur->cr : cur->cb;
-   const int *lblk = comp ? L->cr : L->cb, *ublk = comp ? U->cr : U->cb;
-   int *cdc = comp ? &cur->crDC : &cur->cbDC;
+   uint8_t *cblk = comp ? cur->cr : cur->cb;
+   const uint8_t *lblk = comp ? L->cr : L->cb, *ublk = comp ? U->cr : U->cb;
+   uint8_t *cdc = comp ? &cur->crDC : &cur->cbDC;
    int ldc = comp ? L->crDC : L->cbDC, udc = comp ? U->crDC : U->cbDC;
    int cat_dc = comp ? 10 : 6, cat_ac = comp ? 11 : 7;
    int cat_4 = comp ? 12 : 8, cat_8 = comp ? 13 : 9;
@@ -9040,9 +9052,9 @@ static void rh264_cabac_p_part(rh264_cabac *cb, rh264_frame *f,
  * unavailable neighbour gives condTermFlagN 0 here, where an intra macroblock
  * would use 1 (9.3.3.1.1.9). */
 /* The same over any plane's per-4x4 flags (4:4:4 Cb / Cr as luma). */
-static int rh264_cabac_pcbf_plane_ctx(int raster, const int *cblk,
-      const rh264_cbf *L, const int *lblk, const rh264_cbf *U,
-      const int *ublk, int have_left, int have_up)
+static int rh264_cabac_pcbf_plane_ctx(int raster, const uint8_t *cblk,
+      const rh264_cbf *L, const uint8_t *lblk, const rh264_cbf *U,
+      const uint8_t *ublk, int have_left, int have_up)
 {
    int bx = raster & 3, by = raster >> 2, a, b;
    if (bx > 0) a = cblk[raster-1];
@@ -9071,8 +9083,8 @@ static void rh264_cabac_p_plane444(rh264_cabac *cb, rh264_frame *f,
    int stride = f->cstride;
    uint8_t *P = (comp ? f->V : f->U) + (size_t)(mby*16)*stride + mbx*16;
    uint8_t *nz = f->nzC[comp];
-   int *cblk = comp ? cur->cr : cur->cb;
-   const int *lblk = comp ? L->cr : L->cb, *ublk = comp ? U->cr : U->cb;
+   uint8_t *cblk = comp ? cur->cr : cur->cb;
+   const uint8_t *lblk = comp ? L->cr : L->cb, *ublk = comp ? U->cr : U->cb;
    int cat_4 = comp ? 12 : 8, cat_8 = comp ? 13 : 9;
    int qpc = rh264_chroma_qp(f->qp,
          comp ? f->chroma_qp_offset2 : f->chroma_qp_offset);
