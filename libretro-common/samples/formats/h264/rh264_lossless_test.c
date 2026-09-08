@@ -1,5 +1,6 @@
-/* rh264: High 4:4:4 Predictive - the transform bypass (lossless) and
- * 4:4:4 chroma - against ffmpeg as the oracle, byte-exact.
+/* rh264 against ffmpeg as the oracle, byte-exact: High 4:4:4
+ * Predictive (the transform bypass, 4:4:4 chroma), CABAC I_PCM,
+ * constrained_intra_pred.
  *
  * x264's lossless mode (-qp 0) sets qpprime_y_zero_transform_bypass_flag
  * and codes every macroblock at QP'Y 0: the residual is the sample
@@ -523,6 +524,15 @@ int main(void)
     * inter, CAVLC and CABAC, 4x4 and 8x8 transforms, weighted
     * bi-prediction with a B-pyramid, I_PCM, the deblocking filter on
     * (luma-style on the chroma planes), lossy and lossless. */
+   /* constrained_intra_pred: an inter-coded neighbour is not available
+    * to intra prediction (8.3.1.2) - the up-right and up-left ones too,
+    * and in CABAC the contexts still see it.  Intra macroblocks amid
+    * inter ones in P / B pictures exercise every neighbour position. */
+   printf("constrained_intra_pred, byte-exact vs ffmpeg:\n");
+   oracle_case("cip_cabac",  "testsrc2=s=176x144:r=15",   8, "yuv420p", "-crf 20",
+         "-preset medium -x264-params constrained-intra=1");
+   oracle_case("cip_cavlc",  "testsrc2=s=176x144:r=15",   8, "yuv420p", "-crf 20",
+         "-preset medium -x264-params constrained-intra=1:cabac=0");
    printf("High 4:4:4 Predictive, 4:4:4 chroma, byte-exact vs ffmpeg:\n");
    oracle_case("c444_i_cavlc",   "testsrc2=s=96x80:r=10",    4, "yuv444p", "-crf 16",
          "-preset medium -g 1 -x264-params cabac=0:deblock=2,2");

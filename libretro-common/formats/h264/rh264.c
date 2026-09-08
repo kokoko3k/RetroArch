@@ -3606,10 +3606,17 @@ static int rh264_decode_intra_mb_cavlc(rh264_bits *b, rh264_frame *f,
     * (8.3.1.2).  0xff in the mode grid marks an inter macroblock. */
    if (f->constrained_intra)
    {
-      if (have_up   && f->i4mode[(mby*4-1)*(f->mbw*4)+mbx*4] == 0xff)
+      if (have_up   && f->i4mode[(mby*4-1)*gw+mbx*4] == 0xff)
          have_up = 0;
-      if (have_left && f->i4mode[(mby*4)*(f->mbw*4)+mbx*4-1] == 0xff)
+      if (have_left && f->i4mode[(mby*4)*gw+mbx*4-1] == 0xff)
          have_left = 0;
+      /* the up-right and up-left neighbours feed Intra_4x4 / 8x8
+       * prediction (block 5's top-right, every block's top-left) and
+       * are inter-coded just as often */
+      if (have_ur   && f->i4mode[(mby*4-1)*gw+mbx*4+4] == 0xff)
+         have_ur = 0;
+      if (have_ul   && f->i4mode[(mby*4-1)*gw+mbx*4-1] == 0xff)
+         have_ul = 0;
    }
    (void)cgw;
       if(mb_type==0 && t8ena && rh264_u1(b)){
@@ -8119,9 +8126,13 @@ static int rh264_cbf_cac_ctx_n(int comp,int idx,rh264_cbf *cur,
 static int rh264_cabac_intra_plane444(rh264_cabac *cb, rh264_frame *f,
       int comp, int mbx, int mby, int is_i16, int t8,
       int i16mode, int cbp_luma, rh264_cbf *cur, const rh264_cbf *L,
-      const rh264_cbf *U, int have_up, int have_left, int have_ur,
-      int have_ul)
+      const rh264_cbf *U, int have_up, int have_left,
+      int pu, int pl, int pur, int pul)
 {
+   /* have_up / have_left: neighbour available to the context
+    * derivations; pu / pl / pur / pul: available to predict from
+    * (constrained_intra_pred excludes inter neighbours from the
+    * latter only) */
    int gw = f->mbw*4, gx0 = mbx*4, gy0 = mby*4;
    int stride = f->cstride;
    uint8_t *P = (comp ? f->V : f->U) + (size_t)mby*16*stride + mbx*16;
@@ -8143,7 +8154,7 @@ static int rh264_cabac_intra_plane444(rh264_cabac *cb, rh264_frame *f,
    {
       int32_t dc[16], tmp[16], tbres[256];
       int bi;
-      rh264_intra16x16(P, stride, i16mode, have_up, have_left);
+      rh264_intra16x16(P, stride, i16mode, pu, pl);
       {
          int a = have_left ? (L->avail ? ldc : 1) : 1;
          int b = have_up   ? (U->avail ? udc : 1) : 1;
@@ -8213,9 +8224,9 @@ static int rh264_cabac_intra_plane444(rh264_cabac *cb, rh264_frame *f,
          uint8_t *d = P + (by8*8)*stride + bx8*8;
          /* the luma pass resolved the predicted modes into the grid */
          int mode = f->i4mode[(gy0+by8*2)*gw + gx0+bx8*2];
-         int hu = by8 || have_up, hl = bx8 || have_left;
-         int hul = (bx8 && by8) ? 1 : (bx8 ? have_up : (by8 ? have_left : have_ul));
-         int hur = (b8 == 0) ? have_up : (b8 == 1) ? have_ur : (b8 == 2) ? 1 : 0;
+         int hu = by8 || pu, hl = bx8 || pl;
+         int hul = (bx8 && by8) ? 1 : (bx8 ? pu : (by8 ? pl : pul));
+         int hur = (b8 == 0) ? pu : (b8 == 1) ? pur : (b8 == 2) ? 1 : 0;
          int coded, cy2, cx2;
          rh264_intra8x8(d, stride, mode, hu, hl, hul, hur);
          coded = (cbp_luma >> b8) & 1;
@@ -8261,7 +8272,7 @@ static int rh264_cabac_intra_plane444(rh264_cabac *cb, rh264_frame *f,
          bx = rh264_blk_x[bi]; by = rh264_blk_y[bi]; raster = by*4 + bx;
          mode = f->i4mode[(gy0+by)*gw + gx0+bx];   /* resolved by luma */
          d  = P + (by*4)*stride + bx*4;
-         hu = (by > 0) || have_up; hl = (bx > 0) || have_left;
+         hu = (by > 0) || pu; hl = (bx > 0) || pl;
          switch (bi)
          {
             case 2: case 6: case 8: case 9: case 10: case 12: case 14:
@@ -8269,13 +8280,13 @@ static int rh264_cabac_intra_plane444(rh264_cabac *cb, rh264_frame *f,
             case 3: case 11: case 13: case 15:
                hur = 0; break;
             case 0: case 1: case 4:
-               hur = have_up; break;
+               hur = pu; break;
             case 5:
-               hur = have_ur; break;
+               hur = pur; break;
             default:
                hur = 0; break;
          }
-         hulb = (bx && by) ? 1 : (bx ? hu : (by ? hl : have_ul));
+         hulb = (bx && by) ? 1 : (bx ? hu : (by ? hl : pul));
          rh264_intra4x4(d, stride, mode, hu, hl, hur, hulb);
          for (k = 0; k < 16; k++) coef[k] = 0;
          if (cbp_luma & (1 << (((by>>1)*2) + (bx>>1))))
@@ -8334,7 +8345,21 @@ static int rh264_cabac_decode_mb_ctx(rh264_cabac *cb, const rh264_sps *sps,
    uint8_t *Y=f->Y+(mby*16)*f->ystride+mbx*16;
    uint8_t *U8=f->U+(mby*f->cmbh)*f->cstride+mbx*(f->c444?16:8);
    uint8_t *V8=f->V+(mby*f->cmbh)*f->cstride+mbx*(f->c444?16:8);
+   /* Availability for intra PREDICTION, as distinct from the have_*
+    * availability the context derivations use: where the picture
+    * forbids predicting from inter samples (constrained_intra_pred,
+    * 8.3.1.2), an inter-coded neighbour - 0xff in the mode grid - is
+    * not available to predict from, while its coded_block_flags and
+    * mb_type still shape the contexts (9.3.3.1.1). */
+   int pu = have_up, pl = have_left, pur = have_ur, pul = have_ul;
    memset(cur,0,sizeof(*cur)); cur->avail=1;
+   if (f->constrained_intra)
+   {
+      if (pu  && f->i4mode[(gy0-1)*gw+gx0]   == 0xff) pu  = 0;
+      if (pl  && f->i4mode[gy0*gw+gx0-1]     == 0xff) pl  = 0;
+      if (pur && f->i4mode[(gy0-1)*gw+gx0+4] == 0xff) pur = 0;
+      if (pul && f->i4mode[(gy0-1)*gw+gx0-1] == 0xff) pul = 0;
+   }
 
    /* mb_type bin0 ctxIdxInc: neighbours available & NOT I_4x4 */
    ctxInc = (have_left && L->avail && L->is_i16 ? 1:0)
@@ -8518,7 +8543,7 @@ static int rh264_cabac_decode_mb_ctx(rh264_cabac *cb, const rh264_sps *sps,
       /* I_16x16 blocks contribute DC (mode 2) to neighbour intra4x4 MPM */
       { int yy,xx; for(yy=0;yy<4;yy++) for(xx=0;xx<4;xx++)
            f->i4mode[(gy0+yy)*gw+(gx0+xx)] = 2; }
-      rh264_intra16x16(Y,f->ystride,i16mode,have_up,have_left);
+      rh264_intra16x16(Y,f->ystride,i16mode,pu,pl);
       /* luma DC block (cat0) */
       { int inc, a, b, ndc;
         for(k=0;k<16;k++) dc[k]=0;
@@ -8582,11 +8607,10 @@ static int rh264_cabac_decode_mb_ctx(rh264_cabac *cb, const rh264_sps *sps,
          uint8_t *d = Y + (by8*8)*f->ystride + bx8*8;
          int cgx = gx0 + bx8*2, cgy = gy0 + by8*2;
          int predmode, mode = modes[b8];
-         int hu = by8 || have_up, hl = bx8 || have_left;
-         int hul = (bx8 && by8) ? 1 : (bx8 ? have_up : (by8 ? have_left
-                    : have_ul));
-         int hur = (b8 == 0) ? have_up
-                 : (b8 == 1) ? have_ur
+         int hu = by8 || pu, hl = bx8 || pl;
+         int hul = (bx8 && by8) ? 1 : (bx8 ? pu : (by8 ? pl : pul));
+         int hur = (b8 == 0) ? pu
+                 : (b8 == 1) ? pur
                  : (b8 == 2) ? 1 : 0;
          int k, coded, cy2, cx2;
          { int mA, mB;
@@ -8643,7 +8667,7 @@ static int rh264_cabac_decode_mb_ctx(rh264_cabac *cb, const rh264_sps *sps,
          int raster = by*4+bx;
          uint8_t *d=Y+(by*4)*f->ystride+bx*4;
          int predmode, mode=modes[bi];
-         int hu=(by>0)||have_up, hl=(bx>0)||have_left;
+         int hu=(by>0)||pu, hl=(bx>0)||pl;
          int hur; int32_t coef[16],r[16]; int k,nz=0;
          /* predicted mode = min(modeA,modeB) */
          { int mA,mB;
@@ -8671,15 +8695,15 @@ static int rh264_cabac_decode_mb_ctx(rh264_cabac *cb, const rh264_sps *sps,
             case 3: case 11: case 13: case 15:
                hur=0; break;
             case 0: case 1: case 4:
-               hur=have_up; break;
+               hur=pu; break;
             case 5:
-               hur=have_ur; break;
+               hur=pur; break;
             case 7:
                hur=0; break;
             default: hur=0; break;
          }
          {
-            int hulb=(bx&&by)?1:(bx?hu:(by?hl:have_ul));
+            int hulb=(bx&&by)?1:(bx?hu:(by?hl:pul));
             rh264_intra4x4(d,f->ystride,mode,hu,hl,hur,hulb);
          }
          for(k=0;k<16;k++)coef[k]=0;
@@ -8710,18 +8734,18 @@ static int rh264_cabac_decode_mb_ctx(rh264_cabac *cb, const rh264_sps *sps,
       /* 4:4:4: Cb then Cr, each as luma (7.3.5.3 residual_luma) */
       if (rh264_cabac_intra_plane444(cb, f, 0, mbx, mby, is_i16, t8,
                i16mode, cbp_luma, cur, L, U, have_up, have_left,
-               have_ur, have_ul) < 0
+               pu, pl, pur, pul) < 0
           || rh264_cabac_intra_plane444(cb, f, 1, mbx, mby, is_i16, t8,
                i16mode, cbp_luma, cur, L, U, have_up, have_left,
-               have_ur, have_ul) < 0)
+               pu, pl, pur, pul) < 0)
          return -1;
    }
    else
    {
    /* chroma prediction + residual (4:2:0). Bitstream order (7.3.5.3.1):
     * both chroma DC blocks first, then all chroma AC blocks. */
-   rh264_intra_chroma_h(U8,f->cstride,chroma_mode,have_up,have_left,f->cmbh);
-   rh264_intra_chroma_h(V8,f->cstride,chroma_mode,have_up,have_left,f->cmbh);
+   rh264_intra_chroma_h(U8,f->cstride,chroma_mode,pu,pl,f->cmbh);
+   rh264_intra_chroma_h(V8,f->cstride,chroma_mode,pu,pl,f->cmbh);
    { int comp, blk, k;
      int32_t (*dcs)[8] = cb->cr_dcs, (*cdc)[8] = cb->cr_cdc;
      int32_t (*cac)[8][16] = cb->cr_cac;
