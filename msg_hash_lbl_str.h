@@ -925,6 +925,10 @@
 #define MENU_ENUM_LABEL_SMB_CLIENT_WORKGROUP_STR "smb_client_workgroup"
 #define MENU_ENUM_LABEL_SMB_CLIENT_BROWSE_STR "smb_client_browse"
 
+/* Not a settings row: a submenu entry, listed here so the generated
+ * region below can be rebuilt without dropping it. */
+#define MENU_ENUM_LABEL_CHEEVOS_MENU_SUBMENU_STR "cheevos_menu_submenu"
+
 /* GENERATED REGION BEGIN: settings-definition label strings
  *
  * Produced by tools/gen_lbl_str.py from
@@ -1002,7 +1006,6 @@
 #define MENU_ENUM_LABEL_CHEEVOS_CHALLENGE_INDICATORS_STR "cheevos_challenge_indicators"
 #define MENU_ENUM_LABEL_CHEEVOS_RICHPRESENCE_ENABLE_STR "cheevos_richpresence_enable"
 #define MENU_ENUM_LABEL_CHEEVOS_START_ACTIVE_STR "cheevos_start_active"
-#define MENU_ENUM_LABEL_CHEEVOS_MENU_SUBMENU_STR "cheevos_menu_submenu"
 #define MENU_ENUM_LABEL_CHEEVOS_TEST_UNOFFICIAL_STR "cheevos_test_unofficial"
 #define MENU_ENUM_LABEL_CHEEVOS_UNLOCK_SOUND_ENABLE_STR "cheevos_unlock_sound_enable"
 #define MENU_ENUM_LABEL_CHEEVOS_VERBOSE_ENABLE_STR "cheevos_verbose_enable"
@@ -1672,6 +1675,7 @@
 #define MENU_ENUM_LABEL_VIDEO_STREAM_QUALITY_STR "video_stream_quality"
 #define MENU_ENUM_LABEL_VIDEO_SWAP_INTERVAL_STR "video_swap_interval"
 #define MENU_ENUM_LABEL_VIDEO_SYNCHRONIZATION_SETTINGS_STR "video_synchronization_settings"
+#define MENU_ENUM_LABEL_VIDEO_THREADED_PRESENT_REPEAT_STR "video_threaded_present_repeat"
 #define MENU_ENUM_LABEL_VIDEO_VFILTER_STR "video_vfilter"
 #define MENU_ENUM_LABEL_VIDEO_VIEWPORT_BIAS_PORTRAIT_X_STR "video_viewport_bias_portrait_x"
 #define MENU_ENUM_LABEL_VIDEO_VIEWPORT_BIAS_PORTRAIT_Y_STR "video_viewport_bias_portrait_y"
@@ -1682,7 +1686,6 @@
 #define MENU_ENUM_LABEL_VIDEO_VI_WIDTH_STR "video_vi_width"
 #define MENU_ENUM_LABEL_VIDEO_VSYNC_STR "video_vsync"
 #define MENU_ENUM_LABEL_VIDEO_WAITABLE_SWAPCHAINS_STR "video_waitable_swapchains"
-#define MENU_ENUM_LABEL_VIDEO_THREADED_PRESENT_REPEAT_STR "video_threaded_present_repeat"
 #define MENU_ENUM_LABEL_VIDEO_WIIU_PREFER_DRC_STR "video_wiiu_prefer_drc"
 #define MENU_ENUM_LABEL_VIDEO_WINDOWED_FULLSCREEN_STR "video_windowed_fullscreen"
 #define MENU_ENUM_LABEL_VIDEO_WINDOWED_MODE_SETTINGS_STR "video_windowed_mode_settings"
