@@ -87,6 +87,10 @@ rwebp_anim_stream_t *rwebp_anim_stream_open(const uint8_t *buf, size_t len);
 
 void rwebp_anim_stream_close(rwebp_anim_stream_t *stream);
 
+/* num_frames is the number of ANMF frames indexed so far: the whole
+ * count for a stream opened over a complete buffer, a lower bound for a
+ * progressive stream (rwebp_anim_stream_open_avail) until its scan has
+ * reached the end of the file. */
 void rwebp_anim_stream_get_info(const rwebp_anim_stream_t *stream,
       unsigned *width, unsigned *height, int *num_frames, int *loop_count);
 
@@ -94,9 +98,46 @@ void rwebp_anim_stream_get_info(const rwebp_anim_stream_t *stream,
  * order R,G,B,A), writing its display duration in milliseconds. The
  * returned pointer refers to the stream's internal canvas: it is valid
  * until the next call into the stream and must not be freed. Returns
- * NULL at the end of one pass; call rwebp_anim_stream_rewind to loop. */
+ * NULL at the end of one pass; call rwebp_anim_stream_rewind to loop.
+ * On a progressive stream NULL is also returned, with nothing consumed,
+ * when the next frame's bytes lie past the wall declared by
+ * rwebp_anim_stream_set_avail. */
 const uint32_t *rwebp_anim_stream_next(rwebp_anim_stream_t *stream,
       int *duration_ms);
+
+/* Progressive open over a partially-resident buffer: only the first
+ * 'avail' bytes are guaranteed present.  The container is walked chunk
+ * header by chunk header, never past the wall; VP8X's animation flag
+ * decides "animated" (a still returns NULL with *need_more clear, from
+ * its first chunk alone), and the open succeeds once two ANMF headers
+ * are indexed (so the first frame is resident and the file is known to
+ * animate), or one when the whole file is within 'avail'.  Otherwise
+ * NULL with *need_more set (may be NULL): retry with a larger prefix.
+ * Frames are indexed lazily as the wall advances; a chunk whose bytes
+ * are not yet resident is not decoded (next() returns NULL, nothing
+ * consumed).  rwebp_anim_stream_open(buf, len) is this with
+ * avail == len. */
+rwebp_anim_stream_t *rwebp_anim_stream_open_avail(const uint8_t *buf,
+      size_t len, size_t avail, int *need_more);
+
+/* Exact store of the readable bound (not a raise: a windowed caller's
+ * bytes un-arrive when its feeder decommits behind the decoder or
+ * rewinds the window at a loop).  Clamped to the buffer length. */
+void rwebp_anim_stream_set_avail(rwebp_anim_stream_t *stream, size_t avail);
+
+/* Byte cursor for a windowing feeder.  media_floor is the offset of the
+ * first ANMF chunk header (fixed for the stream's life); consumed is
+ * where the decoder's next read lands - the header of the next frame
+ * to decode, the scan position once every indexed frame is out, the
+ * buffer length once the file is exhausted.  rewind() drops it back to
+ * the floor.  next_span reports the byte range [lo, hi) the next frame
+ * occupies (chunk header to chunk end) so the feeder can make a frame
+ * larger than its lookahead resident before asking for it; 0/0 when no
+ * frame is indexed at the cursor. */
+size_t rwebp_anim_stream_media_floor(const rwebp_anim_stream_t *stream);
+size_t rwebp_anim_stream_consumed(const rwebp_anim_stream_t *stream);
+void rwebp_anim_stream_next_span(const rwebp_anim_stream_t *stream,
+      size_t *lo, size_t *hi);
 
 void rwebp_anim_stream_rewind(rwebp_anim_stream_t *stream);
 
