@@ -5257,6 +5257,10 @@ static void vulkan_free(void *data)
       if (vk->filter_chain_default)
          vulkan_filter_chain_free((vulkan_filter_chain_t*)vk->filter_chain_default);
 
+      /* Whatever the context, not only with HDR: the retained image is
+       * the presenter's, not the HDR path's. */
+      vulkan_retained_free(vk);
+
 #ifdef VULKAN_HDR_SWAPCHAIN
       if (vk->context->flags & VK_CTX_FLAG_HDR_SUPPORT)
       {
@@ -5264,7 +5268,6 @@ static void vulkan_free(void *data)
          vulkan_destroy_buffer(vk->context->device, &vk->hdr.ubo_menu);
          vulkan_destroy_hdr_buffer(vk->context->device, &vk->offscreen_buffer);
          vulkan_destroy_hdr_buffer(vk->context->device, &vk->readback_image);
-         vulkan_retained_free(vk);
          vulkan_deinit_hdr_readback_render_pass(vk);
          video_driver_set_disp_flags(video_driver_get_disp_flags() & ~(VIDEO_FLAG_HDR_SUPPORT | VIDEO_FLAG_HDR10_SUPPORT | VIDEO_FLAG_SCRGB_SUPPORT));
       }
