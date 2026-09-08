@@ -312,6 +312,14 @@ typedef struct
 {
    unsigned              cur_mon_id;
    HANDLE                frameLatencyWaitableObject;
+   /* Copy of the last presented backbuffer, taken before the present of
+    * a frame() that asked for it (retain_output), and the group that
+    * frame put on screen for present_last() to replay. */
+   D3D11Texture2D        retained;
+   unsigned              retained_width;
+   unsigned              retained_height;
+   unsigned              retained_light;
+   unsigned              retained_dark;
    DXGISwapChain         swapChain;
    D3D11Device           device;
    D3D_FEATURE_LEVEL     supportedFeatureLevel;
@@ -2887,6 +2895,8 @@ static void d3d11_gfx_free(void* data)
 
    if (d3d11->flags & D3D11_ST_FLAG_WAITABLE_SWAPCHAINS)
       CloseHandle(d3d11->frameLatencyWaitableObject);
+   Release(d3d11->retained);
+   d3d11->retained = NULL;
 
 
 #ifdef HAVE_OVERLAY
@@ -4103,6 +4113,112 @@ static INLINE void d3d11_wait_for_vblank(d3d11_video_t* d3d11)
    Release(pOutput);
 }
 
+/* Copies the current backbuffer into the retained texture, creating or
+ * resizing that texture to match the swapchain when it does not. */
+static void d3d11_retain_backbuffer(d3d11_video_t *d3d11)
+{
+   D3D11Texture2D back_buffer = NULL;
+   D3D11_TEXTURE2D_DESC desc;
+
+   d3d11->swapChain->lpVtbl->GetBuffer(d3d11->swapChain, 0,
+         uuidof(ID3D11Texture2D), (void**)&back_buffer);
+   if (!back_buffer)
+      return;
+   back_buffer->lpVtbl->GetDesc(back_buffer, &desc);
+
+   if (     !d3d11->retained
+         || d3d11->retained_width  != desc.Width
+         || d3d11->retained_height != desc.Height)
+   {
+      Release(d3d11->retained);
+      d3d11->retained        = NULL;
+      desc.BindFlags         = 0;
+      desc.MiscFlags         = 0;
+      desc.CPUAccessFlags    = 0;
+      desc.Usage             = D3D11_USAGE_DEFAULT;
+      d3d11->device->lpVtbl->CreateTexture2D(d3d11->device, &desc, NULL,
+            &d3d11->retained);
+      d3d11->retained_width  = desc.Width;
+      d3d11->retained_height = desc.Height;
+   }
+
+   if (d3d11->retained)
+      d3d11->context->lpVtbl->CopyResource(d3d11->context,
+            (D3D11Resource)d3d11->retained, (D3D11Resource)back_buffer);
+   Release(back_buffer);
+}
+
+/* Replays the group the retaining frame made: its light presents, then
+ * its dark ones, so BFI keeps its strobe pattern through a repeat. Each
+ * present waits on the frame latency object as frame() does, so the
+ * cadence comes from the swapchain when it can. Returns swaps made. */
+static unsigned d3d11_present_last(void *data)
+{
+   unsigned i;
+   unsigned done          = 0;
+   d3d11_video_t *d3d11   = (d3d11_video_t*)data;
+   D3D11DeviceContext context;
+   unsigned present_flags;
+
+   if (!d3d11 || !d3d11->retained || !d3d11->swapChain)
+      return 0;
+
+   context       = d3d11->context;
+   present_flags = (d3d11->flags & D3D11_ST_FLAG_HAS_ALLOW_TEARING)
+         && !d3d11->swap_interval ? DXGI_PRESENT_ALLOW_TEARING : 0;
+
+   for (i = 0; i < d3d11->retained_light; i++)
+   {
+      D3D11Texture2D back_buffer = NULL;
+      D3D11_TEXTURE2D_DESC desc;
+
+      if (d3d11->flags & D3D11_ST_FLAG_WAITABLE_SWAPCHAINS)
+         WaitForSingleObjectEx(d3d11->frameLatencyWaitableObject, 1000, true);
+
+      d3d11->swapChain->lpVtbl->GetBuffer(d3d11->swapChain, 0,
+            uuidof(ID3D11Texture2D), (void**)&back_buffer);
+      if (!back_buffer)
+         return done;
+      back_buffer->lpVtbl->GetDesc(back_buffer, &desc);
+      if (     desc.Width  != d3d11->retained_width
+            || desc.Height != d3d11->retained_height)
+      {
+         Release(back_buffer);
+         return done;
+      }
+      context->lpVtbl->CopyResource(context,
+            (D3D11Resource)back_buffer, (D3D11Resource)d3d11->retained);
+      Release(back_buffer);
+      DXGIPresent(d3d11->swapChain, d3d11->swap_interval, present_flags);
+      done++;
+   }
+
+   for (i = 0; i < d3d11->retained_dark; i++)
+   {
+      D3D11Texture2D back_buffer  = NULL;
+      D3D11RenderTargetView rtv   = NULL;
+
+      if (d3d11->flags & D3D11_ST_FLAG_WAITABLE_SWAPCHAINS)
+         WaitForSingleObjectEx(d3d11->frameLatencyWaitableObject, 1000, true);
+
+      d3d11->swapChain->lpVtbl->GetBuffer(d3d11->swapChain, 0,
+            uuidof(ID3D11Texture2D), (void**)&back_buffer);
+      if (!back_buffer)
+         return done;
+      d3d11->device->lpVtbl->CreateRenderTargetView(d3d11->device,
+            (D3D11Resource)back_buffer, NULL, &rtv);
+      Release(back_buffer);
+      if (!rtv)
+         return done;
+      context->lpVtbl->OMSetRenderTargets(context, 1, &rtv, NULL);
+      context->lpVtbl->ClearRenderTargetView(context, rtv, d3d11->clearcolor);
+      DXGIPresent(d3d11->swapChain, d3d11->swap_interval, present_flags);
+      Release(rtv);
+      done++;
+   }
+   return done;
+}
+
 static bool d3d11_gfx_frame(
       void*               data,
       const void*         frame,
@@ -5131,6 +5247,17 @@ static bool d3d11_gfx_frame(
    }
 #endif
 
+   /* The backbuffer is undefined after a flip-model present, so the
+    * copy is taken now. Not from the BFI light dupes, which recurse in
+    * here with the dupe lock held and would only copy the same image. */
+   if (     video_info->retain_output
+         && !(d3d11->flags & D3D11_ST_FLAG_FRAME_DUPE_LOCK))
+   {
+      d3d11_retain_backbuffer(d3d11);
+      d3d11->retained_light = 1;
+      d3d11->retained_dark  = 0;
+   }
+
    if (vsync && d3d11->wait_for_vblank < 0)
    {
       d3d11->context->lpVtbl->Flush(d3d11->context);
@@ -5184,6 +5311,15 @@ static bool d3d11_gfx_frame(
             context->lpVtbl->ClearRenderTargetView(context, rtv, d3d11->clearcolor);
             DXGIPresent(d3d11->swapChain, d3d11->swap_interval, present_flags);
          }
+      }
+
+      /* The group this frame made, for present_last() to replay. */
+      if (     video_info->retain_output
+            && !(d3d11->flags & D3D11_ST_FLAG_FRAME_DUPE_LOCK))
+      {
+         d3d11->retained_light = 1 + (video_info->black_frame_insertion
+               - video_info->bfi_dark_frames);
+         d3d11->retained_dark  = video_info->bfi_dark_frames;
       }
    }
 
@@ -6153,7 +6289,8 @@ static const video_poke_interface_t d3d11_poke_interface = {
    NULL, /* d3d11_set_hdr_subpixel_layout */
 #endif
    d3d11_gfx_supports_texture_format,
-   d3d11_gfx_load_texture_compressed
+   d3d11_gfx_load_texture_compressed,
+   d3d11_present_last
 };
 
 static void d3d11_gfx_get_poke_interface(void* data,
