@@ -192,6 +192,58 @@ def apng(dst, secs, w, h, fps):
         '-f', 'apng', dst])
 
 
+def apng_dispose_previous(dst):
+    """A tiny hand-built APNG exercising DISPOSE_PREVIOUS with
+    alpha-blended sub-frames: the region a frame saves for restoring
+    later lives outside the canvas, and a channel-order switch must
+    convert it too, or the restore stamps the old order back in."""
+    import zlib
+
+    def chunk(t, body):
+        return (struct.pack('>I', len(body)) + t + body
+                + struct.pack('>I', zlib.crc32(t + body) & 0xffffffff))
+
+    def raw(w, h, pix):
+        rows = b''
+        for y in range(h):
+            rows += b'\x00' + b''.join(struct.pack('BBBB', *pix(x, y))
+                                        for x in range(w))
+        return zlib.compress(rows)
+
+    W = H = 8
+    seq = [0]
+
+    def fctl(w, h, x, y, dispose, blend):
+        s = struct.pack('>IIIIIHHBB', seq[0], w, h, x, y, 1, 10,
+                        dispose, blend)
+        seq[0] += 1
+        return chunk(b'fcTL', s)
+
+    def fdat(data):
+        s = struct.pack('>I', seq[0]) + data
+        seq[0] += 1
+        return chunk(b'fdAT', s)
+
+    out = b'\x89PNG\r\n\x1a\n'
+    out += chunk(b'IHDR', struct.pack('>IIBBBBB', W, H, 8, 6, 0, 0, 0))
+    out += chunk(b'acTL', struct.pack('>II', 4, 0))
+    # frame 0: full canvas, opaque gradient, dispose NONE (it is what
+    # frame 1's PREVIOUS restores, so it must stay on the canvas)
+    out += fctl(W, H, 0, 0, 0, 0)
+    out += chunk(b'IDAT', raw(W, H, lambda x, y: (x * 30, y * 30, 200, 255)))
+    # frame 1: 4x4 patch at (2,2), half-transparent, blend OVER, dispose PREVIOUS
+    out += fctl(4, 4, 2, 2, 2, 1)
+    out += fdat(raw(4, 4, lambda x, y: (250, 20 + x * 40, 20 + y * 40, 128)))
+    # frame 2: 4x4 patch at (0,4), opaque-ish, blend OVER, dispose NONE
+    out += fctl(4, 4, 0, 4, 0, 1)
+    out += fdat(raw(4, 4, lambda x, y: (10, 240, 60 + x * 20, 200)))
+    # frame 3: 2x2 patch, blend SOURCE
+    out += fctl(2, 2, 5, 1, 0, 0)
+    out += fdat(raw(2, 2, lambda x, y: (90, 90, 250, 90)))
+    out += chunk(b'IEND', b'')
+    open(dst, 'wb').write(out)
+
+
 def main():
     out = sys.argv[1] if len(sys.argv) > 1 else '.'
     os.makedirs(out, exist_ok=True)
@@ -207,6 +259,7 @@ def main():
                         12 * 1024 * 1024)
     still_webp(j('still_lossless.webp'), 1920, 1080)
     apng(j('anim_lossless.png'), 30, 1280, 720, 10)
+    apng_dispose_previous(j('anim_dispose_prev.png'))
 
     seed(j('seed_small.mp4'), 3, 640, 360, '300k')
     seed(j('seed_4k.mp4'), 3, 3840, 2160, '400k')

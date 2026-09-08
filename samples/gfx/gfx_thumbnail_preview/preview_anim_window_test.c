@@ -27,6 +27,14 @@
  *       animation sits there for good.
  *   S1  a still WEBP is refused from its first chunk, without the
  *       whole-file read the fallback used to make.
+ *   A1  a repeat ask for the order already being emitted is honoured.
+ *       rpng_apng answered false to any ask after the first frame,
+ *       even for the order it was already emitting; gfx_thumbnail's
+ *       worker asks per frame and swizzles on false, so every APNG
+ *       frame but the first came out with R and B swapped in the
+ *       raster menu, at the cost of a full-canvas pass per frame.
+ *   A2  a genuine switch mid-animation is honoured too (canvas
+ *       converted once), byte-exact against a decode in that order.
  *
  * Reference frames come from the whole-buffer stream over a malloc'd
  * copy of the file, so the windowed path is compared against the
@@ -200,6 +208,51 @@ static void lowered_bound(const uint8_t *buf, size_t len,
    check("W6 raised again, the same frame follows", ok_back);
 }
 
+/* Channel order: the ask is per frame in the raster menu's worker, so
+ * a stream must answer "yes" to the order it is already emitting, and
+ * a switch must convert the canvas rather than be refused. */
+static void channel_order(const uint8_t *buf, size_t len,
+      enum image_type_enum type, const uint32_t *ref, unsigned w, unsigned h)
+{
+   void *s;
+   const uint32_t *px;
+   uint32_t rgba2 = 0;
+   int dur, ok = 1, ok_switch = 0;
+
+   /* Reference for the third frame in the default (R,G,B,A) order. */
+   if ((s = image_transfer_anim_stream_new((void*)buf, len, type)))
+   {
+      int i;
+      for (i = 0; i < 3; i++)
+         if (!(px = image_transfer_anim_stream_next(s, type, &dur)))
+            break;
+      if (i == 3)
+         rgba2 = crc32_buf(px, (size_t)w * h * 4);
+      image_transfer_anim_stream_free(s, type);
+   }
+
+   if (!(s = image_transfer_anim_stream_new((void*)buf, len, type)))
+   {
+      check("A1 whole-buffer stream opens", 0);
+      return;
+   }
+   ok = image_transfer_anim_stream_set_argb(s, type, 1);
+   px = image_transfer_anim_stream_next(s, type, &dur);
+   ok = ok && px && crc32_buf(px, (size_t)w * h * 4) == ref[0];
+   /* the repeat ask, as gfx_thumbnail_anim_job_step makes it */
+   ok = ok && image_transfer_anim_stream_set_argb(s, type, 1);
+   px = image_transfer_anim_stream_next(s, type, &dur);
+   ok = ok && px && crc32_buf(px, (size_t)w * h * 4) == ref[1];
+   check("A1 repeat ask for the current order is honoured", ok);
+   ok_switch = image_transfer_anim_stream_set_argb(s, type, 0);
+   px = image_transfer_anim_stream_next(s, type, &dur);
+   ok_switch = ok_switch && px && rgba2
+         && crc32_buf(px, (size_t)w * h * 4) == rgba2;
+   check("A2 mid-animation switch converts the canvas (byte-exact)",
+         ok_switch);
+   image_transfer_anim_stream_free(s, type);
+}
+
 /* One pass over the windowed session, feeding before every frame as
  * both consumers do.  Returns frames decoded; mismatches counted. */
 static int play_pass(gfx_anim_preview_t *p, const uint32_t *ref,
@@ -260,8 +313,11 @@ static void run_anim(const char *path, const char *label, int big_frame)
       return;
    }
    ref = reference(buf, len, type, &nref, &w, &h);
-   if (nref >= 2)
+   if (nref >= 3)
+   {
       lowered_bound(buf, len, type, ref, w, h);
+      channel_order(buf, len, type, ref, w, h);
+   }
    free(buf);
    printf("      reference: %d frames %ux%u, file %.1f MiB\n",
          nref, w, h, (double)len / (1024.0 * 1024.0));
@@ -339,6 +395,38 @@ static void run_anim(const char *path, const char *label, int big_frame)
    free(ref);
 }
 
+/* Decoder-level checks only (no window: the file is tiny) on a
+ * hand-built APNG whose frames dispose to PREVIOUS through blended
+ * sub-frames, so the saved region is live across the order switch. */
+static void run_order(const char *path, const char *label)
+{
+   enum image_type_enum type = image_texture_get_type(path);
+   uint8_t *buf;
+   size_t len = 0;
+   uint32_t *ref;
+   int nref = 0;
+   unsigned w = 0, h = 0;
+
+   printf("  %s\n", label);
+   if (!(buf = slurp(path, &len)))
+   {
+      check("F0 fixture readable", 0);
+      return;
+   }
+   ref = reference(buf, len, type, &nref, &w, &h);
+   printf("      reference: %d frames %ux%u\n", nref, w, h);
+   check("F1 whole-buffer reference decodes >= 4 frames", nref >= 4);
+   if (nref >= 4)
+   {
+      /* The switch lands after frame 1, whose DISPOSE_PREVIOUS region
+       * is restored onto the canvas before frame 2: that restore is
+       * what must come back in the new order. */
+      channel_order(buf, len, type, ref, w, h);
+   }
+   free(ref);
+   free(buf);
+}
+
 static void run_still(const char *path, const char *label)
 {
    uint8_t *buf;
@@ -385,6 +473,8 @@ int main(int argc, char **argv)
       run_anim(path, "anim_bigframe.webp (frame > lookahead)", 1);
       snprintf(path, sizeof(path), "%s/anim_lossless.png", argv[i]);
       run_anim(path, "anim_lossless.png (APNG)", 0);
+      snprintf(path, sizeof(path), "%s/anim_dispose_prev.png", argv[i]);
+      run_order(path, "anim_dispose_prev.png (APNG, DISPOSE_PREVIOUS)");
       snprintf(path, sizeof(path), "%s/still_lossless.webp", argv[i]);
       run_still(path, "still_lossless.webp");
    }

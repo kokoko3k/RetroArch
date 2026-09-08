@@ -410,10 +410,12 @@ static bool gfx_thumbnail_anim_job_step(gfx_thumb_anim_job_t *job)
    enum image_type_enum type = (enum image_type_enum)job->type;
    int duration_ms           = 0;
    size_t i, n;
-   /* Ask the stream to emit the upload order directly: the video
-    * streams bake it in their blit, which removes the per-pixel R/B
-    * swizzle pass below; WEBP always emits R,G,B,A and keeps the
-    * fallback conversion. */
+   /* Ask the stream to emit the upload order directly - the video
+    * streams bake it in their blit, WEBP and APNG in their canvas -
+    * which removes the per-pixel R/B swizzle pass below.  Every
+    * stream type honours it now; the fallback stays for one that
+    * cannot (and must answer "yes" to a repeat ask for the order it
+    * already emits, since this is asked per frame). */
    bool native_order         = image_transfer_anim_stream_set_argb(
          job->stream, type, job->use_rgba ? 0 : 1);
 
@@ -1213,8 +1215,8 @@ void gfx_thumbnail_animate(gfx_thumbnail_t *thumbnail)
    decode_start = now;
 
    /* Sample the upload format once and ask the stream to emit it
-    * directly (video streams bake the order in their blit); WEBP is
-    * not honoured and takes the swizzle fallback below. */
+    * directly (every stream type honours it; the swizzle below is the
+    * fallback for one that cannot). */
    sync_use_rgba     = (video_driver_get_disp_flags()
          & VIDEO_FLAG_USE_RGBA) ? true : false;
    sync_native_order = image_transfer_anim_stream_set_argb(

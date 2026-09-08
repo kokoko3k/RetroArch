@@ -833,21 +833,46 @@ const uint32_t *rpng_apng_stream_next(rpng_apng_stream_t *s,
    return s->canvas;
 }
 
+static void apng_swap_rb(uint32_t *px, size_t n)
+{
+   size_t i;
+   for (i = 0; i < n; i++)
+   {
+      uint32_t v = px[i];
+      px[i] = (v & 0xFF00FF00u) | ((v & 0xFFu) << 16) | ((v >> 16) & 0xFFu);
+   }
+}
+
 bool rpng_apng_stream_set_argb(rpng_apng_stream_t *s, int argb)
 {
-   /* Honoured only at a clean boundary (before any frame emitted or
-    * right after a rewind); the canvas is composited in whatever order
-    * frames are decoded in, and switching mid-animation would require
-    * re-swizzling the persistent canvas.  Report success only when it
-    * can be applied cleanly so the caller keeps converting otherwise. */
+   int want;
    if (!s)
       return false;
-   if (s->emitted == 0)
-   {
-      s->emit_argb = argb ? 1 : 0;
+   want = argb ? 1 : 0;
+   /* The order already being emitted is trivially honoured.  This
+    * used to answer false to ANY ask after the first frame - including
+    * the repeat ask for the same order - and the raster menu's worker
+    * asks per frame and swizzles on false: every APNG frame but the
+    * first came out with R and B swapped, after a full-canvas pass it
+    * did not need. */
+   if (want == s->emit_argb)
       return true;
+   /* A real switch: the order is a property of the persistent canvas
+    * (frames blend onto it), so convert it in place once, at this
+    * frame boundary, as rwebp does - and the region saved for a
+    * pending DISPOSE_PREVIOUS with it, since that is copied back onto
+    * the canvas before the next frame.  Compositing itself is
+    * order-agnostic (alpha is the top byte either way).  Before any
+    * frame the canvas is all zeros and the flag just flips. */
+   if (s->emitted > 0 && s->canvas)
+   {
+      apng_swap_rb(s->canvas, (size_t)s->canvas_w * (size_t)s->canvas_h);
+      if (s->have_prev && s->prev_save
+            && s->prev_dispose == APNG_DISPOSE_PREVIOUS)
+         apng_swap_rb(s->prev_save, (size_t)s->prev_w * (size_t)s->prev_h);
    }
-   return false;
+   s->emit_argb = want;
+   return true;
 }
 
 void rpng_apng_stream_rewind(rpng_apng_stream_t *s)
