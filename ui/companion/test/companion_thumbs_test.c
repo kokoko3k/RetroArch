@@ -534,7 +534,7 @@ static void test_animation(void)
  * builds it with ffmpeg). */
 static void test_video_hover(void)
 {
-   char mp4[512];
+   char mp4[512], blocker[512];
    uint32_t ref[4];
    int nref = 0;
    companion_thumbs_t *t;
@@ -577,17 +577,27 @@ static void test_video_hover(void)
    if (nref < 4)
       return;
 
-   t = companion_thumbs_new(0, 2);
+   /* One worker with a large still ahead of the video in the FIFO
+    * queue, so the video's still is provably still queued when
+    * animate() arrives: the hand-off is by design timing-neutral (a
+    * still that finished before the animate() just plays from frame
+    * 0, as a cached one does), but this test is about the hand-off. */
+   fixture(blocker, sizeof(blocker), "blocker.tga");
+   write_tga(blocker, 1536, 1536, 0xff445566u);
+   t = companion_thumbs_new(0, 1);
    ngot = 0;
-   companion_thumbs_request(t, mp4, 16, 16, 1, true, 0);
+   companion_thumbs_request(t, blocker, 16, 16, 9, false, 0);
+   companion_thumbs_request(t, mp4, 16, 16, 1, false, 0);
    companion_thumbs_animate(t, mp4, 16, 16, 2, 0);
-   CHECK(drain(t, 4, 5000) >= 4, "still + 3 animation frames in 5 s (got %u)",
+   CHECK(drain(t, 5, 8000) >= 5, "blocker + still + 3 animation frames in 8 s (got %u)",
          (unsigned)ngot);
    {
       int still_at = -1, a = 0, ok = 1;
       uint32_t anim_seen[3] = {0, 0, 0};
-      for (i = 0; i < ngot && i < 8; i++)
+      for (i = 0; i < ngot && i < 9; i++)
       {
+         if (gots[i].tag == 9)
+            continue;                 /* the blocker */
          if (gots[i].tag == 1)
          {
             still_at = (int)i;
@@ -618,6 +628,43 @@ static void test_video_hover(void)
    CHECK(ngot >= 1 && gots[0].tag == 3 && gots[0].centre == ref[0],
          "cached still: animation starts at frame 0: 0x%08x vs 0x%08x",
          gots[0].centre, ref[0]);
+   companion_thumbs_free(t);
+}
+
+/* An APNG hover, same shape as the video one: request() the still and
+ * animate() the same path back to back.  The still used to be a
+ * whole-file decode of the default image (image_texture_load), then
+ * the animation opened its own session and decoded frame 0 again; now
+ * the head probe routes the still through the session and the
+ * animation continues from frame 1.  The harness's APNG alternates
+ * red / green, so frame 0 is red and frame 1 green. */
+static void test_apng_hover(void)
+{
+   char apng[512], blocker[512];
+   companion_thumbs_t *t = companion_thumbs_new(0, 1);
+   int still_at = -1, first_anim = -1;
+   size_t i;
+   fixture(apng, sizeof(apng), "hover.png");
+   fixture(blocker, sizeof(blocker), "blocker2.tga");
+   CHECK(write_apng(apng, 8, 8, 30), "wrote the APNG");
+   write_tga(blocker, 1536, 1536, 0xff445566u);   /* see test_video_hover */
+   ngot = 0;
+   companion_thumbs_request(t, blocker, 16, 16, 9, false, 0);
+   companion_thumbs_request(t, apng, 16, 16, 1, false, 0);
+   companion_thumbs_animate(t, apng, 16, 16, 2, 0);
+   CHECK(drain(t, 4, 8000) >= 4, "blocker + still + 2 frames in 8 s (got %u)", (unsigned)ngot);
+   for (i = 0; i < ngot; i++)
+   {
+      if (gots[i].tag == 1 && still_at < 0) still_at = (int)i;
+      else if (gots[i].tag == 2 && first_anim < 0) first_anim = (int)i;
+   }
+   CHECK(still_at >= 0 && !gots[still_at].null
+         && gots[still_at].centre == 0xffff0000u,
+         "still is frame 0 (red): 0x%08x", still_at >= 0 ? gots[still_at].centre : 0);
+   CHECK(first_anim >= 0 && gots[first_anim].centre == 0xff00ff00u,
+         "animation continues from frame 1 (green) after the still: 0x%08x",
+         first_anim >= 0 ? gots[first_anim].centre : 0);
+   companion_thumbs_animate_stop(t);
    companion_thumbs_free(t);
 }
 
@@ -744,6 +791,7 @@ int main(int argc, char **argv)
    test_double_failure_no_uaf();
    test_animation();
    test_video_hover();
+   test_apng_hover();
    test_scaler();
    test_undecodable();
    test_many_and_shutdown();

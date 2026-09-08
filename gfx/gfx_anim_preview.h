@@ -91,6 +91,16 @@ typedef struct gfx_anim_preview
  * fails admission - the caller keeps whatever still it has. */
 gfx_anim_preview_t *gfx_anim_preview_open(const char *path, int png_probe);
 
+/* Cheap "does this file animate?" from its head alone, without opening
+ * a session: 1 animated, 0 a still (or a type without an animation
+ * decoder), -1 unreadable.  Reads 4 KiB of a PNG (acTL precedes the
+ * first IDAT) and 32 bytes of a WebP (VP8X's animation flag); answers
+ * 1 for WEBM and MP4 without reading.  Lets a still request take the
+ * anim-first route - the animation's first frame IS the still - for
+ * an animated file, instead of a whole-file still decode that the
+ * animation then re-reads windowed. */
+int gfx_anim_preview_probe(const char *path);
+
 /* Per tick, before decoding: keep the window straddling the decoder's
  * frontier and raise the demuxer's bound to what is resident. false on
  * an I/O failure (the caller should close: the decoder would loop

@@ -46,6 +46,7 @@ SOURCES := gfx_thumbnail_preview_test.c \
            $(LIBRETRO_COMM_DIR)/formats/mp4/rmp4.c \
            $(LIBRETRO_COMM_DIR)/formats/mp4/rmp4_video.c \
            $(LIBRETRO_COMM_DIR)/formats/vp8/rvp8.c \
+           $(LIBRETRO_COMM_DIR)/formats/webp/rwebp.c \
            $(LIBRETRO_COMM_DIR)/formats/webm/rwebm.c \
            $(LIBRETRO_COMM_DIR)/formats/webm/rwebm_video.c \
            $(LIBRETRO_COMM_DIR)/lists/string_list.c \
@@ -59,7 +60,7 @@ SOURCES := gfx_thumbnail_preview_test.c \
            $(LIBRETRO_COMM_DIR)/vfs/vfs_implementation.c
 
 CFLAGS  += -Wall -std=gnu99 -g -O1 \
-           -DHAVE_RMP4 -DHAVE_RWEBM -DHAVE_RAAC -DHAVE_RH264 \
+           -DHAVE_RMP4 -DHAVE_RWEBM -DHAVE_RAAC -DHAVE_RH264 -DHAVE_RWEBP \
            -DHAVE_AUDIOMIXER \
            -DHAVE_MMAP -D_GNU_SOURCE -DMEMMAP_TEST_NO_RESERVE \
            -I. -I$(REPO_ROOT) -I$(LIBRETRO_COMM_DIR)/include
@@ -200,7 +201,7 @@ fixtures:
 	python3 mkfixtures.py fixtures
 
 check: $(TARGET) $(DECODE_TARGET) $(DECODE_TARGET_NORWEBM) $(ANIM_WINDOW_TARGET) fixtures
-	./$(TARGET) fixtures/*.mp4
+	./$(TARGET) fixtures/*.mp4 fixtures/anim_lossless.webp
 	./$(ANIM_WINDOW_TARGET) fixtures
 	./$(DECODE_TARGET) fixtures/trailing_large.mp4 1024   island
 	./$(DECODE_TARGET) fixtures/trailing_large.mp4 262144 island

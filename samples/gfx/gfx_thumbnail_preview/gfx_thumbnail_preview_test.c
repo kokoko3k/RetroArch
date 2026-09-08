@@ -61,6 +61,9 @@ static void run(const char *path, const char *label, int expect_video)
    gfx_thumbnail_t th;
    int i;
    double rss0, peak;
+   /* an animated WEBP takes the video's anim-first route - its first
+    * frame is the still - and has no audio to check */
+   int is_webp = strlen(path) > 5 && !strcmp(path + strlen(path) - 5, ".webp");
 
    /* An unreadable path is a broken invocation, not a result.  Left
     * unchecked the run reported MISSING with A7/A8 passing vacuously
@@ -123,6 +126,10 @@ static void run(const char *path, const char *label, int expect_video)
       check(label, "R2 status AVAILABLE",  th.status == GFX_THUMBNAIL_STATUS_AVAILABLE);
       check(label, "R3 drawable (alpha>0 or fade pushed)",
             (th.alpha > 0.0f) || (hp.fade_pushes > 0));
+      /* the still comes from the session's first frame - for a video
+       * since anim-first, for an animated WEBP since the head probe
+       * routes it the same way (its still decode read and parsed the
+       * whole file, then the animation decoded frame 0 again) */
       check(label, "R4 no whole-file still load queued", hp.still_loads == 0);
       check(label, "R5 RSS growth < 600 MiB", (peak - rss0) < 600.0);
       /* The install's windowed flag must match how the file was
@@ -140,18 +147,18 @@ static void run(const char *path, const char *label, int expect_video)
        * is policy, not breakage.  Under the cap it must start AND get
        * the whole container: handing the mixer a short buffer is the
        * failure 9650f04 papered over by skipping the hand-off. */
-      if (1)
+      if (is_webp)
       {
-         check(label, "A6 preview audio started", hp.audio_streams > 0);
-         check(label, "A7 mixer got the whole container",
-               hp.last_audio_bytes == (size_t)file_len(path));
+         /* no audio track to start */
+         check(label, "A6 no preview audio for an animated WEBP",
+               hp.audio_streams == 0);
       }
       else
       {
-         /* No cap any more: the window costs its slide, not the
-          * file, so even a 7 GB recording gets audio. */
+         /* No cap: the window costs its slide, not the file, so even
+          * a 7 GB recording gets audio. */
          check(label, "A6 preview audio started", hp.audio_streams > 0);
-         check(label, "A7 mixer sees the whole container",
+         check(label, "A7 mixer got the whole container",
                hp.last_audio_bytes == (size_t)file_len(path));
       }
       check(label, "A8 feeder kept the decoder fed (no stalls)",

@@ -852,7 +852,18 @@ static bool gfx_thumbnail_try_video_open(gfx_thumbnail_t *thumbnail,
 
    ptype = image_texture_get_type(path);
    if (   (ptype != IMAGE_TYPE_WEBM)
-       && (ptype != IMAGE_TYPE_MP4))
+       && (ptype != IMAGE_TYPE_MP4)
+       && (ptype != IMAGE_TYPE_WEBP))
+      return false;
+   /* An animated WEBP takes the same anim-first route as a video: its
+    * still decode read and parsed the whole file for the first frame,
+    * which the animation then decoded again from its window.  A still
+    * WEBP is told apart by its first chunk (32 bytes) and keeps the
+    * still task.  PNG stays on the still task: a playlist's stills are
+    * PNGs, and that task supplies the APNG verdict from the bytes it
+    * reads anyway, where a probe here would be an extra open per
+    * thumbnail. */
+   if (ptype == IMAGE_TYPE_WEBP && gfx_anim_preview_probe(path) != 1)
       return false;
 
    gfx_thumbnail_anim_open(thumbnail, path);

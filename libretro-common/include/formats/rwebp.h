@@ -45,6 +45,13 @@ int rwebp_process_image(rwebp_t *rwebp, void **buf,
  * byte beyond it. */
 bool rwebp_still_ready(const void *buf, size_t avail);
 
+/* Is this an animated WebP?  Decided from the file's first chunk: an
+ * extended file (VP8X first) with the animation flag.  Needs the first
+ * 30 bytes; 'need_more' (may be NULL) is set when fewer are given and
+ * the answer is not yet known, so a caller probing a short header
+ * prefix can tell that apart from a conclusive "still". */
+bool rwebp_is_animated_ex(const uint8_t *buf, size_t len, int *need_more);
+
 bool rwebp_set_buf_ptr(rwebp_t *rwebp, void *data, size_t len);
 
 void rwebp_free(rwebp_t *rwebp);

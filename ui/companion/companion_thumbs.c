@@ -308,6 +308,20 @@ uint32_t *companion_thumbs_scale(const uint32_t *src, unsigned sw,
    return companion_thumbs_scale_ex(src, sw, sh, dw, dh, bg, false);
 }
 
+/* Does @path take the anim-first route - its still being the first
+ * frame of a preview session that the animation then continues?  A
+ * video always; a WEBP or PNG when its head says it animates (32
+ * bytes / 4 KiB read); anything else never. */
+static int ct_anim_first(const char *path)
+{
+   enum image_type_enum type = image_texture_get_type(path);
+   if (type == IMAGE_TYPE_WEBM || type == IMAGE_TYPE_MP4)
+      return 1;
+   if (type == IMAGE_TYPE_WEBP || type == IMAGE_TYPE_PNG)
+      return gfx_anim_preview_probe(path) == 1;
+   return 0;
+}
+
 /* A video's still is its first frame, taken through the same windowed
  * open the menu uses: image_texture_load would read the whole file
  * (a two-hour recording) to show one frame; this reads the head. */
@@ -365,14 +379,23 @@ static uint32_t *ct_decode_video_still(companion_thumbs_t *t,
  * (may be NULL) is asked between decode steps so a giant image can be
  * abandoned at shutdown or once nobody wants it. */
 static uint32_t *ct_decode(companion_thumbs_t *t, const char *path,
-      int w, int h, uint32_t bg, bool (*should_abort)(void *ud), void *ud)
+      int w, int h, uint32_t bg, bool (*should_abort)(void *ud), void *ud,
+      int anim_first)
 {
    struct texture_image img;
    uint32_t *bits = NULL;
+   /* A video, an animated WEBP or an APNG (anim_first, decided by
+    * ct_anim_first): the still is the first frame through the windowed
+    * session, and the session is then handed to the animation.
+    * image_texture_load would read and parse the whole file for that
+    * one frame - 600 ms and 40 MB for a 40 MB animated WEBP, against
+    * 16 ms through the session.  A still PNG / WEBP decodes as before;
+    * so does an animated one the session would not admit. */
+   if (anim_first)
    {
-      enum image_type_enum type = image_texture_get_type(path);
-      if (type == IMAGE_TYPE_WEBM || type == IMAGE_TYPE_MP4)
-         return ct_decode_video_still(t, path, w, h, bg);
+      uint32_t *b = ct_decode_video_still(t, path, w, h, bg);
+      if (b)
+         return b;
    }
    memset(&img, 0, sizeof(img));
    if (image_texture_load_ex(&img, path, should_abort, ud))
@@ -663,13 +686,17 @@ static bool ct_should_abort(void *ud)
  * when @path is not a video (nothing for the animation to wait on) or
  * no slot is free (then the animation thread opens its own, as before).
  * Lock taken here. */
-static int ct_video_inflight_claim(companion_thumbs_t *t, const char *path)
+/* Publish that this worker holds a job for @path, under the lock and
+ * in the same critical section that popped it: the animation thread
+ * decides "still pending or not" from the rings plus these slots, and
+ * a job that has left the ring but not yet reached its slot would
+ * read as absent - the animation then opened its own session and
+ * showed frame 0 twice (seen under TSan, where the gap is wide).
+ * Every job is published, not just the anim-first ones; the animation
+ * thread only ever waits on a path it decided animates. */
+static int ct_inflight_claim_locked(companion_thumbs_t *t, const char *path)
 {
-   enum image_type_enum type = image_texture_get_type(path);
    int slot = -1, i;
-   if (type != IMAGE_TYPE_WEBM && type != IMAGE_TYPE_MP4)
-      return -1;
-   slock_lock(t->lock);
    for (i = 0; i < (int)(sizeof(t->video_inflight) / sizeof(t->video_inflight[0])); i++)
       if (!t->video_inflight[i])
       {
@@ -677,7 +704,6 @@ static int ct_video_inflight_claim(companion_thumbs_t *t, const char *path)
          slot = i;
          break;
       }
-   slock_unlock(t->lock);
    return slot;
 }
 
@@ -707,7 +733,7 @@ static void ct_worker(void *ud)
       struct ct_abort_ctx actx;
       uint32_t *bits;
       bool aborted;
-      int slot;
+      int slot, af;
       slock_lock(t->lock);
       /* Timed wait: a lost wake-up can never keep a worker parked past
        * quit, so shutdown cannot hang on the join. */
@@ -723,13 +749,14 @@ static void ct_worker(void *ud)
          slock_unlock(t->lock);
          continue;
       }
+      slot = ct_inflight_claim_locked(t, job.e->path);
       slock_unlock(t->lock);
 
       actx.t     = t;
       actx.epoch = job.epoch;
-      slot       = ct_video_inflight_claim(t, job.e->path);
+      af         = ct_anim_first(job.e->path);
       bits       = ct_decode(t, job.e->path, job.e->w, job.e->h, job.bg,
-            ct_should_abort, &actx);
+            ct_should_abort, &actx, af);
 
       slock_lock(t->lock);
       if (slot >= 0)
@@ -825,9 +852,8 @@ static void ct_anim_thread(void *ud)
           * only while the still is genuinely queued or in flight; a
           * failed or aborted decode parks nothing and the wait ends
           * with the job. */
-         enum image_type_enum type = image_texture_get_type(path);
          t->anim_opening = true;
-         if (type == IMAGE_TYPE_WEBM || type == IMAGE_TYPE_MP4)
+         if (ct_anim_first(path))
          {
             for (;;)
             {
@@ -1241,7 +1267,7 @@ size_t companion_thumbs_poll(companion_thumbs_t *t,
       while (t->queued && cpu_features_get_time_usec() < end
             && ct_next_job(t, &job))
          ct_push_done(t, &job, ct_decode(t, job.e->path, job.e->w,
-               job.e->h, job.bg, NULL, NULL));
+               job.e->h, job.bg, NULL, NULL, 0));
    }
 #else
    (void)budget_us;

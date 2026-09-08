@@ -32,6 +32,9 @@
 #ifdef HAVE_RPNG
 #include <formats/rpng.h>
 #endif
+#ifdef HAVE_RWEBP
+#include <formats/rwebp.h>
+#endif
 
 #include "gfx_anim_preview.h"
 #include "../configuration.h"
@@ -109,6 +112,42 @@ bool gfx_anim_preview_mem_ok(gfx_anim_preview_t *p, uint64_t px)
       return false;
    return p->windowed ? gfx_anim_preview_window_ok(px)
                       : gfx_anim_preview_whole_ok((uint64_t)p->len, px);
+}
+
+/* --- probe ----------------------------------------------------------------- */
+
+int gfx_anim_preview_probe(const char *path)
+{
+   enum image_type_enum type;
+   uint8_t head[4096];
+   int64_t got;
+   int more = 0;
+   RFILE *fp;
+
+   if (string_is_empty(path))
+      return -1;
+   type = image_texture_get_type(path);
+   if (type == IMAGE_TYPE_WEBM || type == IMAGE_TYPE_MP4)
+      return 1;
+   if (type != IMAGE_TYPE_PNG && type != IMAGE_TYPE_WEBP)
+      return 0;
+   if (!(fp = filestream_open(path,
+         RETRO_VFS_FILE_ACCESS_READ, RETRO_VFS_FILE_ACCESS_HINT_NONE)))
+      return -1;
+   got = filestream_read(fp, head, (type == IMAGE_TYPE_PNG) ? 4096 : 32);
+   filestream_close(fp);
+   if (got <= 0)
+      return -1;
+#ifdef HAVE_RPNG
+   if (type == IMAGE_TYPE_PNG)
+      return rpng_is_apng_ex(head, (size_t)got, &more) ? 1 : 0;
+#endif
+#ifdef HAVE_RWEBP
+   if (type == IMAGE_TYPE_WEBP)
+      return rwebp_is_animated_ex(head, (size_t)got, &more) ? 1 : 0;
+#endif
+   (void)more;
+   return 0;
 }
 
 /* --- open ------------------------------------------------------------------ */

@@ -2086,6 +2086,28 @@ int rwebp_process_image(rwebp_t *rwebp, void **buf_data,
    return IMAGE_PROCESS_ERROR;
 }
 
+bool rwebp_is_animated_ex(const uint8_t *buf, size_t len, int *need_more)
+{
+   if (need_more) *need_more = 0;
+   if (len < 12)
+   {
+      if (need_more) *need_more = 1;
+      return false;
+   }
+   if (rw32(buf) != RW_CC('R','I','F','F') || rw32(buf+8) != RW_CC('W','E','B','P'))
+      return false;
+   if (len < 21)
+   {
+      if (need_more) *need_more = 1;
+      return false;
+   }
+   /* VP8X is the first chunk when present; its first payload byte
+    * carries the flags, bit 1 the animation */
+   if (rw32(buf+12) != RW_CC('V','P','8','X'))
+      return false;
+   return (buf[20] & 0x02) != 0;
+}
+
 bool rwebp_still_ready(const void *buf, size_t avail)
 {
    rw_ctr c;
