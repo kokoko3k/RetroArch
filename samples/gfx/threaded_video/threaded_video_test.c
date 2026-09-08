@@ -41,6 +41,7 @@
 #include "../../../verbosity.h"
 
 #include <time/rtime.h>
+#include <retro_timers.h>
 #include <file/config_file.h>
 
 static unsigned failures = 0;
@@ -283,10 +284,10 @@ static void lane_swap_count(void)
    run_frames(3);
    expect_wrapper(true, "swapcount threaded");
    video_thread_wait_idle();
-   before  = video_st->swap_count;
+   before  = video_thread_swap_count();
    run_frames(40);
    video_thread_wait_idle();
-   after   = video_st->swap_count;
+   after   = video_thread_swap_count();
    {
       thread_video_t *thr = (thread_video_t*)video_st->data;
       CHECK(after > before, "threaded path: swap_count did not advance");
@@ -300,6 +301,76 @@ static void lane_swap_count(void)
 
    if (failures == had)
       fprintf(stderr, "[pass] swap-count lane\n");
+}
+
+/* ------------------------------------------------------------------ */
+/* Lane: presenter repeats                                            */
+/*   With video_threaded_present_repeat on and a driver that can      */
+/*   present its last frame again (the null driver can), a stalled    */
+/*   core must not stall the display: the worker keeps presenting at  */
+/*   the refresh period, each repeat advancing swap_count by one and  */
+/*   never counting as a rendered frame for the idle barrier.         */
+/* ------------------------------------------------------------------ */
+
+static void lane_present_repeat(void)
+{
+   unsigned had = failures;
+   video_driver_state_t *video_st = video_state_get_ptr();
+   settings_t *settings           = config_get_ptr();
+   thread_video_t *thr;
+   uint64_t swaps0, swaps1, rep0, rep1;
+
+   settings->bools.video_threaded_present_repeat = true;
+
+   command_event(CMD_EVENT_MENU_TOGGLE, NULL);
+   set_threaded_via_setting(true);
+   run_frames(10);
+   expect_wrapper(true, "repeat lane");
+   thr = (thread_video_t*)video_st->data;
+   video_thread_wait_idle();
+
+   /* Core stall: no frames for roughly four display periods. */
+   slock_lock(thr->lock);
+   rep0   = thr->frames_repeated;
+   slock_unlock(thr->lock);
+   swaps0 = video_thread_swap_count();
+   retro_sleep(70);
+   video_thread_wait_idle();          /* must not block on repeats */
+   slock_lock(thr->lock);
+   rep1   = thr->frames_repeated;
+   slock_unlock(thr->lock);
+   swaps1 = video_thread_swap_count();
+   CHECK(rep1 > rep0, "no repeats during a 70 ms core stall");
+   CHECK(rep1 - rep0 >= 2 && rep1 - rep0 <= 8,
+         "%llu repeats over 70 ms at 60 Hz", (unsigned long long)(rep1 - rep0));
+   CHECK(swaps1 - swaps0 == rep1 - rep0,
+         "swap_count moved %llu for %llu repeats",
+         (unsigned long long)(swaps1 - swaps0), (unsigned long long)(rep1 - rep0));
+
+   /* Core back: rendering resumes, repeats stop competing with it. */
+   run_frames(30);
+   expect_wrapper(true, "after stall");
+
+   /* Off: no repeats at all through the same stall. */
+   settings->bools.video_threaded_present_repeat = false;
+   run_frames(5);
+   video_thread_wait_idle();
+   slock_lock(thr->lock);
+   rep0 = thr->frames_repeated;
+   slock_unlock(thr->lock);
+   retro_sleep(70);
+   video_thread_wait_idle();
+   slock_lock(thr->lock);
+   rep1 = thr->frames_repeated;
+   slock_unlock(thr->lock);
+   CHECK(rep1 == rep0,
+         "repeats happened with the setting off");
+
+   set_threaded_via_setting(false);
+   command_event(CMD_EVENT_MENU_TOGGLE, NULL);
+
+   if (failures == had)
+      fprintf(stderr, "[pass] present-repeat lane\n");
 }
 
 /* ------------------------------------------------------------------ */
@@ -384,6 +455,7 @@ int main(int argc, char *argv[])
    lane_reinit_under_wrapper(cycles / 2 + 1);
    lane_toggle_in_game(cycles);
    lane_swap_count();
+   lane_present_repeat();
 
    /* Orderly shutdown: the teardown barriers are part of what is
     * under test. */

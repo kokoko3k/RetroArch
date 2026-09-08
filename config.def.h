@@ -504,6 +504,12 @@
 #define DEFAULT_VIDEO_THREADED false
 #endif
 
+/* With threaded video, keep presenting the last frame at the display's
+ * cadence while the core is late, instead of leaving the last present
+ * on screen for longer. Needs a driver that can repeat a frame cheaply
+ * (poke->present_last); ignored under BFI and shader sub-frames. */
+#define DEFAULT_VIDEO_THREADED_PRESENT_REPEAT false
+
 #if defined(HAVE_THREADS)
 #if defined(GEKKO) || defined(PSP) || defined(PS2)
 /* For single-core consoles right now it's best to have this be disabled. */

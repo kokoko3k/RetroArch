@@ -171,6 +171,16 @@ typedef struct thread_packet
 typedef struct thread_video
 {
    retro_time_t last_time;
+   /* Presenter state, all owned by the video thread. present_period
+    * is one display period in usec, taken from the refresh rate of the
+    * last frame rendered; last_present is when that frame, or the
+    * last repeat of it, went out. present_repeat is set once a frame
+    * has been rendered with retain_output and the driver can present
+    * it again. */
+   retro_time_t present_period;
+   retro_time_t last_present;
+   uint64_t frames_repeated;
+   bool present_repeat;
 
    slock_t *lock;
    /* cond_cmd carries two distinct predicates - the command reply
@@ -355,6 +365,11 @@ uintptr_t video_thread_texture_handle(void *data,
  * said so; true in every other case, including when there is no
  * wrapper, so callers need no threading test of their own. */
 bool video_thread_presentable(void);
+
+/* video_st->swap_count is written by the video thread while the wrapper
+ * is installed; this reads it under the wrapper's lock. Without the
+ * wrapper (or from the video thread) it is the plain value. */
+uint64_t video_thread_swap_count(void);
 
 void video_thread_wait_idle(void);
 

@@ -536,9 +536,28 @@ static void video_thread_loop(void *data)
 
    for (;;)
    {
+      bool repeat_due = false;
+
       slock_lock(thr->lock);
       while (thr->send_cmd == CMD_VIDEO_NONE && !thr->frame.pending)
-         scond_wait(thr->cond_thread, thr->lock);
+      {
+         /* With a frame retained, the wait has a deadline: the next
+          * display period after the last present. Passing it with
+          * nothing new is what a repeat is for. */
+         if (thr->present_repeat && thr->present_period > 0)
+         {
+            retro_time_t now      = cpu_features_get_time_usec();
+            retro_time_t deadline = thr->last_present + thr->present_period;
+            if (now >= deadline)
+            {
+               repeat_due = true;
+               break;
+            }
+            scond_wait_timeout(thr->cond_thread, thr->lock, deadline - now);
+         }
+         else
+            scond_wait(thr->cond_thread, thr->lock);
+      }
 
       /* Claim the oldest filled slot before releasing the lock: from
        * here until completion the slot is this thread's and the main
@@ -564,6 +583,7 @@ static void video_thread_loop(void *data)
       if (claimed)
       {
          struct video_viewport vp;
+         uint64_t        presents = 0;
          bool               alive = false;
          bool               focus = false;
          bool        has_windowed = false;
@@ -601,6 +621,15 @@ static void video_thread_loop(void *data)
                 * value carried from the main thread is whatever it read
                 * when the frame was built and is superseded here. */
                video_info->swap_count = video_state_get_ptr()->swap_count;
+               /* Retain what this frame puts on screen when the setting
+                * is on and the driver can put it there again. BFI and
+                * sub-frames present more than one image per frame; a
+                * repeat would show only the last, so they opt out. */
+               video_info->retain_output =
+                     video_info->threaded_present_repeat
+                  && thr->poke && thr->poke->present_last
+                  && !video_info->black_frame_insertion
+                  && video_info->shader_subframes <= 1;
 
                ret = thr->driver->frame(thr->driver_data,
                   thr->frame.slot[slot].buffer,
@@ -615,8 +644,18 @@ static void video_thread_loop(void *data)
                slock_unlock(thr->frame.lock);
 
                if (ret)
-                  video_state_get_ptr()->swap_count +=
-                     video_driver_presents_per_frame(video_info);
+               {
+                  presents = video_driver_presents_per_frame(video_info);
+                  /* The presenter's clock: this frame just went out,
+                   * and the next one is due a display period later. */
+                  thr->last_present   = cpu_features_get_time_usec();
+                  thr->present_period = video_info->refresh_rate > 0.0f
+                     ? (retro_time_t)(1000000.0f / video_info->refresh_rate)
+                     : 0;
+                  thr->present_repeat = video_info->retain_output;
+               }
+               else
+                  thr->present_repeat = false;
 
                if (ret)
                {
@@ -652,8 +691,35 @@ static void video_thread_loop(void *data)
           * than letting the main thread read video_driver_st. */
          thr->scale_width   = video_state_get_ptr()->scale_width;
          thr->scale_height  = video_state_get_ptr()->scale_height;
+         /* Under the wrapper this thread owns swap_count; every advance
+          * happens here, under lock, so the main thread can read it
+          * consistently through video_thread_swap_count(). */
+         video_state_get_ptr()->swap_count += presents;
          thr->frame.busy    = false;
          scond_signal(thr->cond_cmd);
+         slock_unlock(thr->lock);
+      }
+      else if (repeat_due)
+      {
+         /* Nothing new by the deadline: show the retained frame again
+          * so the display keeps its cadence. No shader chain runs and
+          * no menu texture is touched, so this is not a rendered frame
+          * for the purposes of video_thread_wait_idle(). */
+         bool ok = false;
+         slock_lock(thr->frame.lock);
+         if (thr->driver_data && thr->poke && thr->poke->present_last)
+            ok = thr->poke->present_last(thr->driver_data);
+         slock_unlock(thr->frame.lock);
+
+         slock_lock(thr->lock);
+         if (ok)
+         {
+            video_state_get_ptr()->swap_count++;
+            thr->frames_repeated++;
+            thr->last_present   = cpu_features_get_time_usec();
+         }
+         else
+            thr->present_repeat = false;
          slock_unlock(thr->lock);
       }
    }
@@ -1092,8 +1158,9 @@ static void video_thread_free(void *data)
       scond_free(thr->cond_thread);
 
       RARCH_LOG(
-         "Threaded video stats: Frames pushed: %u, Frames dropped: %u.\n",
-         thr->hit_count, thr->miss_count);
+         "Threaded video stats: Frames pushed: %u, Frames dropped: %u, Frames repeated: %llu.\n",
+         thr->hit_count, thr->miss_count,
+         (unsigned long long)thr->frames_repeated);
 
       /* video_init_thread() pointed the video state at the vtable
        * embedded in this struct. Point it back at the wrapped driver's
@@ -1836,6 +1903,23 @@ bool video_thread_presentable(void)
 
    slock_lock(thr->lock);
    ret = thr->presentable;
+   slock_unlock(thr->lock);
+   return ret;
+}
+
+uint64_t video_thread_swap_count(void)
+{
+   uint64_t ret;
+   video_driver_state_t *video_st = video_state_get_ptr();
+   thread_video_t       *thr;
+   if (!video_st->thread_wrapper_active)
+      return video_st->swap_count;
+   if (!(thr = (thread_video_t*)video_st->data) || !thr->thread)
+      return video_st->swap_count;
+   if (sthread_get_thread_id(thr->thread) == sthread_get_current_thread_id())
+      return video_st->swap_count;
+   slock_lock(thr->lock);
+   ret = video_st->swap_count;
    slock_unlock(thr->lock);
    return ret;
 }

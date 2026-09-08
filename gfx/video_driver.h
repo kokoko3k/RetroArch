@@ -503,6 +503,7 @@ typedef struct video_frame_info
     * so a later poke->present_last() can show it again without
     * re-rendering. Off unless a presenter is going to repeat frames. */
    bool retain_output;
+   bool threaded_present_repeat;
 } video_frame_info_t;
 
 typedef void (*update_window_title_cb)(void*);

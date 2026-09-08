@@ -417,6 +417,40 @@ static void *video_null_init(const video_info_t *video,
 static bool video_null_frame(void *a, const void *b, unsigned c, unsigned d,
 uint64_t e, unsigned f, const char *g, video_frame_info_t *h) { return true; }
 static void video_null_free(void *a) { }
+static bool video_null_present_last(void *a) { return true; }
+static const video_poke_interface_t video_null_poke_interface = {
+   NULL, /* get_flags */
+   NULL, /* load_texture */
+   NULL, /* unload_texture */
+   NULL, /* set_video_mode */
+   NULL, /* get_refresh_rate */
+   NULL, /* set_filtering */
+   NULL, /* get_video_output_size */
+   NULL, /* get_video_output_prev */
+   NULL, /* get_video_output_next */
+   NULL, /* get_current_framebuffer */
+   NULL, /* get_proc_address */
+   NULL, /* set_aspect_ratio */
+   NULL, /* apply_state_changes */
+   NULL, /* set_texture_frame */
+   NULL, /* set_texture_enable */
+   NULL, /* set_osd_msg */
+   NULL, /* show_mouse */
+   NULL, /* grab_mouse_toggle */
+   NULL, /* get_current_shader */
+   NULL, /* get_current_software_framebuffer */
+   NULL, /* get_hw_render_interface */
+   NULL, /* set_hdr_menu_nits */
+   NULL, /* set_hdr_paper_white_nits */
+   NULL, /* set_hdr_expand_gamut */
+   NULL, /* set_hdr_scanlines */
+   NULL, /* set_hdr_subpixel_layout */
+   NULL, /* supports_texture_format */
+   NULL, /* load_texture_compressed */
+   video_null_present_last
+};
+static void video_null_get_poke_interface(void *a,
+      const video_poke_interface_t **iface) { *iface = &video_null_poke_interface; }
 static void video_null_set_nonblock_state(void *a, bool b, bool c, unsigned d) { }
 static bool video_null_alive(void *a) { return frontend_driver_get_signal_handler_state() != 1; }
 static bool video_null_focus(void *a) { return true; }
@@ -445,7 +479,7 @@ video_driver_t video_null = {
 #ifdef HAVE_OVERLAY
   NULL, /* overlay_interface */
 #endif
-  NULL, /* get_poke_interface */
+  video_null_get_poke_interface,
    NULL, /* wrap_type_to_enum */
    NULL, /* shader_load_begin */
    NULL, /* shader_load_step */
@@ -3971,8 +4005,15 @@ void video_driver_build_info(video_frame_info_t *video_info)
    video_info->bfi_dark_frames             = settings->uints.video_bfi_dark_frames;
    video_info->shader_subframes            = settings->uints.video_shader_subframes;
    video_info->current_subframe            = 0;
-   video_info->swap_count                  = video_st->swap_count;
+#ifdef HAVE_THREADS
+   /* The video thread owns and stamps this under the wrapper. */
+   if (video_st->thread_wrapper_active)
+      video_info->swap_count               = 0;
+   else
+#endif
+      video_info->swap_count               = video_st->swap_count;
    video_info->retain_output               = false;
+   video_info->threaded_present_repeat     = settings->bools.video_threaded_present_repeat;
    video_info->scan_subframes              = settings->bools.video_scan_subframes;
    video_info->hard_sync                   = settings->bools.video_hard_sync;
    video_info->hard_sync_frames            = settings->uints.video_hard_sync_frames;
