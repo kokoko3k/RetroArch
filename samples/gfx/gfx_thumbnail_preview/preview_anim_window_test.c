@@ -281,6 +281,21 @@ static void run_anim(const char *path, const char *label, int big_frame)
       free(ref);
       return;
    }
+   /* Ask for transparent huge pages on the reservation, as a host with
+    * THP=always (the GitHub runners) grants them unasked: a touch at a
+    * window edge then faults in a whole 2 MiB page, so residency runs
+    * up to two huge pages past what the window commits.  Asking for it
+    * here makes every host behave like the worst one, and the budget
+    * below carries that allowance explicitly instead of the check
+    * passing on a madvise-mode box and failing in CI. */
+#ifdef MADV_HUGEPAGE
+   {
+      size_t page = (size_t)sysconf(_SC_PAGESIZE);
+      uintptr_t lo = (uintptr_t)p->base & ~(uintptr_t)(page - 1);
+      size_t n  = ((uintptr_t)p->base + p->len - lo + page - 1) & ~(page - 1);
+      (void)madvise((void*)lo, n, MADV_HUGEPAGE);
+   }
+#endif
    check("W1 windowed (reservation available here)",
          gfx_anim_preview_windowed(p));
    check("W1 media floor and consumed are a real cursor",
@@ -302,13 +317,14 @@ static void run_anim(const char *path, const char *label, int big_frame)
 
    /* Resident pages of the file mapping: the permanent head, the
     * lookahead, the margin behind the decoder, plus one paced feed
-    * budget of slack and the oversized frame where there is one.  The
-    * file is well past that; a whole-file load reports the file
+    * budget of slack, two huge pages of edge rounding (see the
+    * MADV_HUGEPAGE above), and the oversized frame where there is one.
+    * The file is well past that; a whole-file load reports the file
     * length. */
    budget = (double)(GFX_ANIM_PREVIEW_WINDOW_KEEP
          + GFX_ANIM_PREVIEW_WINDOW_AHEAD + GFX_ANIM_PREVIEW_WINDOW_BACK
          + GFX_ANIM_PREVIEW_FEED_BUDGET) / (1024.0 * 1024.0)
-         + (big_frame ? 12.0 : 0.0) + 2.0;
+         + (big_frame ? 12.0 : 0.0) + 2.0 * 2.0 + 2.0;
    printf("      mapping resident peak %.1f MiB, budget %.1f MiB, "
           "file %.1f MiB\n",
          peak_map, budget, (double)len / (1024.0 * 1024.0));
