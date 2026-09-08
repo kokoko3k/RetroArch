@@ -577,27 +577,33 @@ static void test_video_hover(void)
    if (nref < 4)
       return;
 
-   /* One worker with a large still ahead of the video in the FIFO
-    * queue, so the video's still is provably still queued when
-    * animate() arrives: the hand-off is by design timing-neutral (a
-    * still that finished before the animate() just plays from frame
-    * 0, as a cached one does), but this test is about the hand-off. */
+   /* One worker, and a large still queued URGENT ahead of the video's
+    * PREFETCH request: urgent jobs are served before any prefetch job
+    * (the documented policy, independent of the order within a ring),
+    * so the video's still is provably still queued when animate()
+    * arrives.  The hand-off is by design timing-neutral - a still that
+    * finished before the animate() just plays from frame 0, as a
+    * cached one does - but this test is about the hand-off, and on the
+    * CI runners the tiny video's still did finish first. */
    fixture(blocker, sizeof(blocker), "blocker.tga");
    write_tga(blocker, 1536, 1536, 0xff445566u);
    t = companion_thumbs_new(0, 1);
    ngot = 0;
-   companion_thumbs_request(t, blocker, 16, 16, 9, false, 0);
+   companion_thumbs_request(t, blocker, 16, 16, 9, true, 0);
    companion_thumbs_request(t, mp4, 16, 16, 1, false, 0);
    companion_thumbs_animate(t, mp4, 16, 16, 2, 0);
    CHECK(drain(t, 5, 8000) >= 5, "blocker + still + 3 animation frames in 8 s (got %u)",
          (unsigned)ngot);
    {
-      int still_at = -1, a = 0, ok = 1;
+      int still_at = -1, blocker_at = -1, a = 0, ok = 1;
       uint32_t anim_seen[3] = {0, 0, 0};
       for (i = 0; i < ngot && i < 9; i++)
       {
          if (gots[i].tag == 9)
+         {
+            if (blocker_at < 0) blocker_at = (int)i;
             continue;                 /* the blocker */
+         }
          if (gots[i].tag == 1)
          {
             still_at = (int)i;
@@ -608,6 +614,8 @@ static void test_video_hover(void)
             anim_seen[a++] = gots[i].centre;
       }
       CHECK(still_at >= 0, "the still was delivered");
+      CHECK(blocker_at >= 0 && blocker_at < still_at,
+            "the blocker was decoded before the still (ordering premise)");
       CHECK(a == 3, "three animation frames captured");
       /* the first animation frame is the SECOND picture: the still
        * already shows the first and the session carried on from it */
@@ -642,22 +650,25 @@ static void test_apng_hover(void)
 {
    char apng[512], blocker[512];
    companion_thumbs_t *t = companion_thumbs_new(0, 1);
-   int still_at = -1, first_anim = -1;
+   int still_at = -1, first_anim = -1, blocker_at = -1;
    size_t i;
    fixture(apng, sizeof(apng), "hover.png");
    fixture(blocker, sizeof(blocker), "blocker2.tga");
    CHECK(write_apng(apng, 8, 8, 30), "wrote the APNG");
    write_tga(blocker, 1536, 1536, 0xff445566u);   /* see test_video_hover */
    ngot = 0;
-   companion_thumbs_request(t, blocker, 16, 16, 9, false, 0);
+   companion_thumbs_request(t, blocker, 16, 16, 9, true, 0);
    companion_thumbs_request(t, apng, 16, 16, 1, false, 0);
    companion_thumbs_animate(t, apng, 16, 16, 2, 0);
    CHECK(drain(t, 4, 8000) >= 4, "blocker + still + 2 frames in 8 s (got %u)", (unsigned)ngot);
    for (i = 0; i < ngot; i++)
    {
-      if (gots[i].tag == 1 && still_at < 0) still_at = (int)i;
+      if (gots[i].tag == 9 && blocker_at < 0) blocker_at = (int)i;
+      else if (gots[i].tag == 1 && still_at < 0) still_at = (int)i;
       else if (gots[i].tag == 2 && first_anim < 0) first_anim = (int)i;
    }
+   CHECK(blocker_at >= 0 && still_at >= 0 && blocker_at < still_at,
+         "the blocker was decoded before the still (ordering premise)");
    CHECK(still_at >= 0 && !gots[still_at].null
          && gots[still_at].centre == 0xffff0000u,
          "still is frame 0 (red): 0x%08x", still_at >= 0 ? gots[still_at].centre : 0);

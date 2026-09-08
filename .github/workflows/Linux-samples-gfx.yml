@@ -48,7 +48,7 @@ jobs:
             $pkgs
 
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v5
 
       - name: Video modeline engine goldens and C89 lane
         shell: bash
@@ -766,7 +766,7 @@ jobs:
           # step cannot silently run against an empty glob.
           make clean all SANITIZER=thread
           make fixtures
-          TSAN_OPTIONS=halt_on_error=1 FRAMES=60 timeout 300 \
+          TSAN_OPTIONS=halt_on_error=1:allocator_may_return_null=1 FRAMES=60 timeout 300 \
              ./gfx_thumbnail_preview_test fixtures/*.mp4 fixtures/anim_lossless.webp
           echo "[pass] gfx_thumbnail_preview_test (TSan)"
           TSAN_OPTIONS=halt_on_error=1 timeout 600 bash -c '
