@@ -2191,15 +2191,71 @@ bool vulkan_create_swapchain(gfx_ctx_vulkan_data_t *vk,
    else
       vk->flags     &= ~VK_DATA_FLAG_EMULATING_MAILBOX;
 
+   /* Resolve the present mode before deciding whether a new swapchain
+    * is needed at all.  A swap_interval change only matters to the
+    * swapchain through the present mode it resolves to; on a surface
+    * that offers FIFO alone every interval resolves to FIFO, and
+    * intervals above 1 are emulated by frame duplication in the video
+    * driver, never by the swapchain. */
+   vkGetPhysicalDeviceSurfacePresentModesKHR(
+         vk->context.gpu, vk->vk_surface,
+         &present_mode_count, NULL);
+   if (present_mode_count < 1 || present_mode_count > 16)
+   {
+      RARCH_ERR("[Vulkan] Bogus present modes found.\n");
+      return false;
+   }
+   vkGetPhysicalDeviceSurfacePresentModesKHR(
+         vk->context.gpu, vk->vk_surface,
+         &present_mode_count, present_modes);
+
+   for (i = 0; i < present_mode_count; i++)
+      vk->context.present_modes[i] = present_modes[i];
+
+   /* Prefer IMMEDIATE without vsync */
+   for (i = 0; i < present_mode_count; i++)
+   {
+      if (     !swap_interval
+            && !vsync
+            && present_modes[i] == VK_PRESENT_MODE_IMMEDIATE_KHR)
+      {
+         swapchain_present_mode = VK_PRESENT_MODE_IMMEDIATE_KHR;
+         break;
+      }
+
+      if (     swap_interval < 0
+            && present_modes[i] == VK_PRESENT_MODE_FIFO_RELAXED_KHR)
+      {
+         swapchain_present_mode = VK_PRESENT_MODE_FIFO_RELAXED_KHR;
+         break;
+      }
+   }
+
+   /* If still in FIFO with no swap interval, try MAILBOX */
+   for (i = 0; i < present_mode_count; i++)
+   {
+      if (     !swap_interval
+            && swapchain_present_mode == VK_PRESENT_MODE_FIFO_KHR
+            && present_modes[i] == VK_PRESENT_MODE_MAILBOX_KHR)
+      {
+         swapchain_present_mode = VK_PRESENT_MODE_MAILBOX_KHR;
+         break;
+      }
+   }
+
    vk->flags        |= VK_DATA_FLAG_CREATED_NEW_SWAPCHAIN;
 
    if (       (vk->swapchain != VK_NULL_HANDLE)
          && (!(vk->context.flags & VK_CTX_FLAG_INVALID_SWAPCHAIN))
          &&   (vk->context.swapchain_width  == width)
          &&   (vk->context.swapchain_height == height)
-         &&   (vk->context.swap_interval    == swap_interval))
+         &&   (   (vk->context.swap_interval          == swap_interval)
+               || (vk->context.swapchain_present_mode == swapchain_present_mode)))
    {
-      /* Do not bother creating a swapchain redundantly. */
+      /* Do not bother creating a swapchain redundantly.  The interval
+       * still takes effect: the driver reads it for frame duplication,
+       * and the mailbox emulation below is keyed off it. */
+      vk->context.swap_interval = swap_interval;
 #ifdef VULKAN_DEBUG
       RARCH_DBG("[Vulkan] Do not need to re-create swapchain.\n");
 #endif
@@ -2253,53 +2309,7 @@ bool vulkan_create_swapchain(gfx_ctx_vulkan_data_t *vk,
 
    vulkan_emulated_mailbox_deinit(&vk->mailbox);
 
-   vkGetPhysicalDeviceSurfacePresentModesKHR(
-         vk->context.gpu, vk->vk_surface,
-         &present_mode_count, NULL);
-   if (present_mode_count < 1 || present_mode_count > 16)
-   {
-      RARCH_ERR("[Vulkan] Bogus present modes found.\n");
-      return false;
-   }
-   vkGetPhysicalDeviceSurfacePresentModesKHR(
-         vk->context.gpu, vk->vk_surface,
-         &present_mode_count, present_modes);
-
    vk->context.swap_interval = swap_interval;
-
-   for (i = 0; i < present_mode_count; i++)
-      vk->context.present_modes[i] = present_modes[i];
-
-   /* Prefer IMMEDIATE without vsync */
-   for (i = 0; i < present_mode_count; i++)
-   {
-      if (     !swap_interval
-            && !vsync
-            && present_modes[i] == VK_PRESENT_MODE_IMMEDIATE_KHR)
-      {
-         swapchain_present_mode = VK_PRESENT_MODE_IMMEDIATE_KHR;
-         break;
-      }
-
-      if (     swap_interval < 0
-            && present_modes[i] == VK_PRESENT_MODE_FIFO_RELAXED_KHR)
-      {
-         swapchain_present_mode = VK_PRESENT_MODE_FIFO_RELAXED_KHR;
-         break;
-      }
-   }
-
-   /* If still in FIFO with no swap interval, try MAILBOX */
-   for (i = 0; i < present_mode_count; i++)
-   {
-      if (     !swap_interval
-            && swapchain_present_mode == VK_PRESENT_MODE_FIFO_KHR
-            && present_modes[i] == VK_PRESENT_MODE_MAILBOX_KHR)
-      {
-         swapchain_present_mode = VK_PRESENT_MODE_MAILBOX_KHR;
-         break;
-      }
-   }
 
    /* Present mode logging */
    if (vk->swapchain == VK_NULL_HANDLE)
@@ -2715,6 +2725,7 @@ bool vulkan_create_swapchain(gfx_ctx_vulkan_data_t *vk,
    info.oldSwapchain           = NULL;
    if (old_swapchain != VK_NULL_HANDLE)
       vkDestroySwapchainKHR(vk->context.device, old_swapchain, NULL);
+   old_swapchain               = VK_NULL_HANDLE;
 #else
    info.oldSwapchain           = old_swapchain;
 #endif
@@ -2732,10 +2743,42 @@ bool vulkan_create_swapchain(gfx_ctx_vulkan_data_t *vk,
    {
       VkResult res = vkCreateSwapchainKHR(vk->context.device,
                &info, NULL, &vk->swapchain);
+
+#ifndef __APPLE__
+      /* oldSwapchain is retired by the call whether or not the new one
+       * was created, so nothing is lost by dropping it and asking again
+       * without the handoff.  Some display WSIs (PowerVR on
+       * VK_KHR_display) refuse to build a replacement while the old
+       * swapchain still holds the plane, and succeed once it is gone. */
+      if (res != VK_SUCCESS && old_swapchain != VK_NULL_HANDLE)
+      {
+         RARCH_WARN("[Vulkan] Swapchain replacement failed (err = %d); "
+               "retrying without oldSwapchain.\n", (int)res);
+         vkDestroySwapchainKHR(vk->context.device, old_swapchain, NULL);
+         old_swapchain     = VK_NULL_HANDLE;
+         info.oldSwapchain = VK_NULL_HANDLE;
+         vk->swapchain     = VK_NULL_HANDLE;
+         res               = vkCreateSwapchainKHR(vk->context.device,
+               &info, NULL, &vk->swapchain);
+      }
+#endif
+
       if (res != VK_SUCCESS)
       {
          RARCH_ERR("[Vulkan] Failed to create swapchain (err = %d).\n",
                (int)res);
+         /* Leave the context in the same "no swapchain yet" state the
+          * zero-extent path uses, so the acquire path retries the
+          * create on a later frame instead of presenting to a retired
+          * or undefined handle. */
+         if (old_swapchain != VK_NULL_HANDLE)
+            vkDestroySwapchainKHR(vk->context.device, old_swapchain, NULL);
+         vk->swapchain                    = VK_NULL_HANDLE;
+         vk->context.num_swapchain_images = 1;
+         memset(vk->context.swapchain_images, 0,
+               sizeof(vk->context.swapchain_images));
+         vk->context.flags               |=  VK_CTX_FLAG_INVALID_SWAPCHAIN;
+         vk->context.flags               &= ~VK_CTX_FLAG_HAS_ACQUIRED_SWAPCHAIN;
          return false;
       }
    }
@@ -2768,6 +2811,7 @@ bool vulkan_create_swapchain(gfx_ctx_vulkan_data_t *vk,
 
    vk->context.swapchain_width        = swapchain_size.width;
    vk->context.swapchain_height       = swapchain_size.height;
+   vk->context.swapchain_present_mode = swapchain_present_mode;
 #ifdef VULKAN_HDR_SWAPCHAIN
    vk->context.swapchain_colour_space = format.colorSpace;
 #endif /* VULKAN_HDR_SWAPCHAIN */

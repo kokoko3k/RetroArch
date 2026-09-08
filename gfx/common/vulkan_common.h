@@ -237,6 +237,10 @@ typedef struct vulkan_context
    unsigned swapchain_width;
    unsigned swapchain_height;
    unsigned num_recycled_acquire_semaphores;
+   /* Present mode the current swapchain was created with; compared
+    * against the mode a new swap_interval resolves to so a request
+    * that would not change the swapchain does not recreate it. */
+   VkPresentModeKHR swapchain_present_mode;
 
    int8_t swap_interval;
    uint8_t flags;
