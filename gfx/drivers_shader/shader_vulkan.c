@@ -783,6 +783,7 @@ struct CommonResources
     * read by every pass in build_semantics().  Eliminates N per-pass
     * copies of identical data and the O(passes) broadcast loops. */
    uint64_t frame_count;
+   uint64_t swap_count;
    int32_t frame_direction;       /* init: 1 */
    uint32_t frame_time_delta;
    float original_fps;
@@ -3803,6 +3804,12 @@ static void slang_pass_build_semantics(struct slang_pass *pass,
    slang_pass_build_semantic_uint(pass, buffer, SLANG_SEMANTIC_CURRENT_SUBFRAME,
                       pass->common->current_subframe);
 
+   /* Each sub-frame is its own present; CurrentSubFrame is 1-based. */
+   slang_pass_build_semantic_uint(pass, buffer, SLANG_SEMANTIC_SWAP_COUNT,
+                      (uint32_t)(pass->common->swap_count
+                         + (pass->common->current_subframe
+                            ? pass->common->current_subframe - 1 : 0)));
+
    slang_pass_build_semantic_uint(pass, buffer, SLANG_SEMANTIC_FRAME_TIME_DELTA,
                       pass->common->frame_time_delta);
 
@@ -4992,6 +4999,13 @@ void vulkan_filter_chain_set_frame_count(
       uint64_t count)
 {
    slang_chain_set_frame_count(chain, count);
+}
+
+void vulkan_filter_chain_set_swap_count(
+      vulkan_filter_chain_t *chain,
+      uint64_t count)
+{
+   chain->common.swap_count = count;
 }
 
 void vulkan_filter_chain_set_frame_count_period(

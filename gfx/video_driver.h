@@ -380,6 +380,12 @@ typedef struct video_info
 
 typedef struct video_frame_info
 {
+   /* Presents the display had seen before this frame's first one.
+    * Every swap counts - core frame, BFI dark frame, shader sub-frame,
+    * repeat - so it advances at the monitor's cadence, not the core's.
+    * Owned by whichever thread presents: video_driver_frame() on the
+    * direct path, the video thread under the threaded wrapper. */
+   uint64_t swap_count;
    void *userdata;
    void *widgets_userdata;
    void *disp_userdata;
@@ -889,6 +895,8 @@ typedef struct
    retro_time_t frame_time_samples[MEASURE_FRAME_TIME_SAMPLES_COUNT];
    uint64_t frame_time_count;
    uint64_t frame_count;
+   /* See video_frame_info_t::swap_count. */
+   uint64_t swap_count;
    uint8_t *record_gpu_buffer;
 #ifdef HAVE_VIDEO_FILTER
    rarch_softfilter_t *state_filter;
@@ -1201,6 +1209,8 @@ void video_driver_invalidate_hw_render_cache(void);
 struct retro_hw_render_callback *video_driver_get_hw_context(void);
 
 bool video_driver_get_viewport_info(struct video_viewport *viewport);
+
+uint64_t video_driver_presents_per_frame(const video_frame_info_t *video_info);
 
 /**
  * config_get_video_driver_options:

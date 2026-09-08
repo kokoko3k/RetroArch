@@ -596,7 +596,11 @@ static void video_thread_loop(void *data)
                 * the thread_video_t wrapper instead of the real driver
                 * data.  This thread knows its own. The slot is discarded
                 * after this call, so the driver may scribble on it. */
-               video_info->userdata = thr->driver_data;
+               video_info->userdata   = thr->driver_data;
+               /* This thread presents, so it owns the swap counter; the
+                * value carried from the main thread is whatever it read
+                * when the frame was built and is superseded here. */
+               video_info->swap_count = video_state_get_ptr()->swap_count;
 
                ret = thr->driver->frame(thr->driver_data,
                   thr->frame.slot[slot].buffer,
@@ -609,6 +613,10 @@ static void video_thread_loop(void *data)
                   video_info);
 
                slock_unlock(thr->frame.lock);
+
+               if (ret)
+                  video_state_get_ptr()->swap_count +=
+                     video_driver_presents_per_frame(video_info);
 
                if (ret)
                {

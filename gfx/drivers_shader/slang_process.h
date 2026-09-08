@@ -75,10 +75,15 @@ enum slang_semantic
    SLANG_SEMANTIC_ACCELEROMETER         = 20,
    /* vec3, accelerometer rest position XYZ */
    SLANG_SEMANTIC_ACCELEROMETER_REST    = 21,
-   SLANG_NUM_BASE_SEMANTICS        = 22,
+   /* uint, presents completed before this frame's first present. Advances
+    * on every swap the display sees - core frames, BFI dark frames, shader
+    * sub-frames and repeats alike - so a shader can key an effect to the
+    * monitor's cadence rather than the core's. */
+   SLANG_SEMANTIC_SWAP_COUNT            = 22,
+   SLANG_NUM_BASE_SEMANTICS        = 23,
 
    /* float, user defined parameter, arrayed */
-   SLANG_SEMANTIC_FLOAT_PARAMETER  = 23,
+   SLANG_SEMANTIC_FLOAT_PARAMETER  = 24,
 
    SLANG_NUM_SEMANTICS,
    SLANG_INVALID_SEMANTIC          = -1

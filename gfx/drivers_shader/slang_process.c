@@ -88,7 +88,8 @@ static const char *semantic_uniform_names[] = {
    "HDR10",
    "Gyroscope",
    "Accelerometer",
-   "AccelerometerRest"
+   "AccelerometerRest",
+   "SwapCount"
 };
 
 static bool slang_reflect(
@@ -568,6 +569,11 @@ static bool slang_process_reflection(
          enum slang_semantic _semantic   = (enum slang_semantic)semantic;
 
          uniform.data = map->uniforms[semantic];
+         /* A backend that has not wired a source for this semantic leaves
+          * the slot NULL; the shader then reads its zero-initialised
+          * default rather than the upload copying from NULL. */
+         if (!uniform.data)
+            continue;
          uniform.size = src->num_components * (unsigned)sizeof(float);
          if (semantic < (int)(sizeof(semantic_uniform_names) / sizeof(*semantic_uniform_names)))
             strlcpy(uniform.id, semantic_uniform_names[_semantic], sizeof(uniform.id));
@@ -1811,6 +1817,7 @@ static bool validate_type_for_semantic(spvc_type type, enum slang_semantic sem)
             &&  spvc_type_get_columns(type)  == 1;
          /* int */
       case SLANG_SEMANTIC_CURRENT_SUBFRAME:
+      case SLANG_SEMANTIC_SWAP_COUNT:
          return spvc_type_get_basetype(type) == SPVC_BASETYPE_UINT32
             &&  spvc_type_get_vector_size(type)  == 1
             &&  spvc_type_get_columns(type)  == 1;

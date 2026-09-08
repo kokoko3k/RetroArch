@@ -4932,6 +4932,8 @@ static bool gl3_frame(void *data, const void *frame,
       }
 
       gl3_filter_chain_set_frame_count(filter_chain, frame_count);
+      gl3_filter_chain_set_swap_count(filter_chain,
+            video_info->swap_count);
 #ifdef HAVE_REWIND
       gl3_filter_chain_set_frame_direction(filter_chain, state_manager_frame_is_reversed() ? -1 : 1);
 #else

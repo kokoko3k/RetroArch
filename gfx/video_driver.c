@@ -3971,6 +3971,7 @@ void video_driver_build_info(video_frame_info_t *video_info)
    video_info->bfi_dark_frames             = settings->uints.video_bfi_dark_frames;
    video_info->shader_subframes            = settings->uints.video_shader_subframes;
    video_info->current_subframe            = 0;
+   video_info->swap_count                  = video_st->swap_count;
    video_info->scan_subframes              = settings->bools.video_scan_subframes;
    video_info->hard_sync                   = settings->bools.video_hard_sync;
    video_info->hard_sync_frames            = settings->uints.video_hard_sync_frames;
@@ -5020,6 +5021,17 @@ VIDEO_NOINLINE static const void *video_driver_convert_xrgb2101010(
    return video_st->pix10_convert_buf;
 }
 
+/* Swaps a single driver frame call puts on the display: the light
+ * frame, its BFI dark frames, and each shader sub-frame of every one of
+ * those. The same product video_driver_get_refresh_rate() scales by. */
+uint64_t video_driver_presents_per_frame(const video_frame_info_t *video_info)
+{
+   uint64_t n = (uint64_t)video_info->black_frame_insertion + 1;
+   if (video_info->shader_subframes > 1)
+      n *= video_info->shader_subframes;
+   return n;
+}
+
 void video_driver_frame(const void *data, unsigned width,
       unsigned height, size_t pitch)
 {
@@ -5885,6 +5897,7 @@ void video_driver_frame(const void *data, unsigned width,
    if (render_frame && vid && vid->frame)
    {
       video_info.current_subframe = 0;
+      video_info.swap_count       = video_st->swap_count;
       if (vid->frame(
                video_st->data, data, width, height,
                video_st->frame_count, (unsigned)pitch,
@@ -5900,6 +5913,13 @@ void video_driver_frame(const void *data, unsigned width,
          video_driver_modify_disp_flags(VIDEO_FLAG_ACTIVE, 0);
       else
          video_driver_modify_disp_flags(0, VIDEO_FLAG_ACTIVE);
+
+#ifdef HAVE_THREADS
+      /* Under the wrapper the video thread is the presenter and
+       * advances the counter as it goes; this thread only pushed. */
+      if (!video_st->thread_wrapper_active)
+#endif
+         video_st->swap_count += video_driver_presents_per_frame(&video_info);
 
       /* A frame has gone out, so fonts retired while it was being
        * built are one frame closer to being safe to release. Inside

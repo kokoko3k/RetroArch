@@ -7342,6 +7342,9 @@ static bool vulkan_frame(void *data, const void *frame,
          (vulkan_filter_chain_t*)filter_chain, frame_index);
    vulkan_filter_chain_set_frame_count(
          (vulkan_filter_chain_t*)filter_chain, frame_count);
+   vulkan_filter_chain_set_swap_count(
+         (vulkan_filter_chain_t*)filter_chain,
+         video_info->swap_count);
 
    /* Sub-frame info for multiframe shaders (per real content frame).
       Should always be 1 for non-use of subframes*/

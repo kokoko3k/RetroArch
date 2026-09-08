@@ -1073,6 +1073,7 @@ struct gl3_pass
    size_t uniforms_size;
 
    uint64_t frame_count;
+   uint64_t swap_count;
    unsigned frame_count_period;
    int32_t frame_direction;
    uint32_t frame_time_delta;
@@ -1626,6 +1627,7 @@ static bool gl3_pass_init_pipeline(struct gl3_pass *pass)
    gl3_pass_reflect_parameter(pass, "Gyroscope", &pass->reflection.semantics[SLANG_SEMANTIC_GYROSCOPE]);
    gl3_pass_reflect_parameter(pass, "Accelerometer", &pass->reflection.semantics[SLANG_SEMANTIC_ACCELEROMETER]);
    gl3_pass_reflect_parameter(pass, "AccelerometerRest", &pass->reflection.semantics[SLANG_SEMANTIC_ACCELEROMETER_REST]);
+   gl3_pass_reflect_parameter(pass, "SwapCount", &pass->reflection.semantics[SLANG_SEMANTIC_SWAP_COUNT]);
 
    {
       const slang_semantic_meta *g =
@@ -2224,6 +2226,11 @@ static void gl3_pass_build_semantics(struct gl3_pass *pass, uint8_t *buffer,
                       pass->total_subframes);
    gl3_pass_build_semantic_uint(pass, buffer, SLANG_SEMANTIC_CURRENT_SUBFRAME,
                       pass->current_subframe);
+   /* Each sub-frame is its own present; CurrentSubFrame is 1-based. */
+   gl3_pass_build_semantic_uint(pass, buffer, SLANG_SEMANTIC_SWAP_COUNT,
+                      (uint32_t)(pass->swap_count
+                         + (pass->current_subframe
+                            ? pass->current_subframe - 1 : 0)));
 
    /* Sensor pass->uniforms — per-frame snapshot cached
     * by input_driver_poll() on the main thread */
@@ -3416,6 +3423,13 @@ static void gl3_chain_set_frame_count(struct gl3_filter_chain *chain, uint64_t c
       gl3_pass_set_frame_count(chain->passes[i], count);
 }
 
+static void gl3_chain_set_swap_count(struct gl3_filter_chain *chain, uint64_t count)
+{
+   unsigned i;
+   for (i = 0; i < chain->num_passes; i++)
+      chain->passes[i]->swap_count = count;
+}
+
 static void gl3_chain_set_frame_count_period(struct gl3_filter_chain *chain, unsigned pass, unsigned period)
 {
    gl3_pass_set_frame_count_period(chain->passes[pass], period);
@@ -4095,6 +4109,13 @@ void gl3_filter_chain_set_frame_count(
       uint64_t count)
 {
    gl3_chain_set_frame_count(chain, count);
+}
+
+void gl3_filter_chain_set_swap_count(
+      gl3_filter_chain_t *chain,
+      uint64_t count)
+{
+   gl3_chain_set_swap_count(chain, count);
 }
 
 void gl3_filter_chain_set_frame_direction(
