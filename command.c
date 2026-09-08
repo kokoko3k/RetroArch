@@ -183,10 +183,15 @@ static void command_parse_msg(command_t *handle, char *buf)
 {
    char     *save  = NULL;
    const char *tok = strtok_r(buf, "\n", &save);
+   unsigned gen    = input_driver_command_generation();
 
    while (tok)
    {
       command_parse_sub_msg(handle, tok);
+      /* The command may have reinitialised the input driver, which
+       * owns and has now freed 'handle'. Nothing further may use it. */
+      if (input_driver_command_generation() != gen)
+         return;
       tok = strtok_r(NULL, "\n", &save);
    }
 }
@@ -225,6 +230,7 @@ static void network_command_free(command_t *handle)
 static void command_network_poll(command_t *handle)
 {
    ssize_t ret;
+   unsigned gen = input_driver_command_generation();
    char buf[2048];
    command_network_t *netcmd = (command_network_t*)handle->userptr;
 
@@ -243,6 +249,10 @@ static void command_network_poll(command_t *handle)
       buf[ret] = '\0';
 
       command_parse_msg(handle, buf);
+      /* See command_generation: the command may have freed this
+       * object. The remaining datagrams wait for the next poll. */
+      if (input_driver_command_generation() != gen)
+         return;
    }
 }
 
@@ -366,14 +376,25 @@ static void command_stdin_poll(command_t *handle)
       else
       {
          ptrdiff_t msg_len;
+         size_t    rest;
+         char     *msg;
          *last_newline++ = '\0';
          msg_len         = last_newline - stdincmd->stdin_buf;
+         rest            = stdincmd->stdin_buf_ptr - msg_len;
 
-         command_parse_msg(handle, stdincmd->stdin_buf);
-
-         memmove(stdincmd->stdin_buf, last_newline,
-               stdincmd->stdin_buf_ptr - msg_len);
-         stdincmd->stdin_buf_ptr -= msg_len;
+         /* A command can free this object from under us (see
+          * command_generation): take the message off the buffer, tidy the
+          * buffer, and only then run the message from a private copy,
+          * touching nothing of this object afterwards. */
+         msg = strdup(stdincmd->stdin_buf);
+         memmove(stdincmd->stdin_buf, last_newline, rest);
+         stdincmd->stdin_buf_ptr = rest;
+         if (msg)
+         {
+            command_parse_msg(handle, msg);
+            free(msg);
+         }
+         return;
       }
    }
 }
@@ -586,6 +607,7 @@ static void uds_command_free(command_t *handle)
 
 static void command_uds_poll(command_t *handle)
 {
+   unsigned gen = input_driver_command_generation();
    int i;
    int fd;
    ssize_t ret;
@@ -614,6 +636,9 @@ static void command_uds_poll(command_t *handle)
          udscmd->last_fd = fd;
 
          command_parse_msg(handle, buf);
+         /* See command_generation: this object may be gone now. */
+         if (input_driver_command_generation() != gen)
+            return;
       }
       else
       {

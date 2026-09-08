@@ -6211,6 +6211,11 @@ void input_driver_init_command(input_driver_state_t *input_st,
 
 }
 
+unsigned input_driver_command_generation(void)
+{
+   return input_driver_st.command_generation;
+}
+
 void input_driver_deinit_command(input_driver_state_t *input_st)
 {
    int i;
@@ -6219,6 +6224,7 @@ void input_driver_deinit_command(input_driver_state_t *input_st)
       if (input_st->command[i])
          input_st->command[i]->destroy(
             input_st->command[i]);
+      input_st->command_generation++;
 
       input_st->command[i] = NULL;
     }

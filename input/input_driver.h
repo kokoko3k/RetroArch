@@ -588,6 +588,12 @@ typedef struct
    const input_device_driver_t   *secondary_joypad;      /* ptr alignment */
    const retro_keybind_set *libretro_input_binds[MAX_USERS];
 #ifdef HAVE_COMMAND
+   /* Bumped whenever the command interfaces below are torn down. A
+    * command that reinitialises the input driver - LOAD_CONTENT,
+    * DRIVERS_REINIT - frees the very object whose poll dispatched it;
+    * the dispatcher compares this before and after and stops when it
+    * has changed rather than touch that object again. */
+   unsigned command_generation;
    command_t *command[MAX_CMD_DRIVERS];
 #endif
 #ifdef HAVE_BSV_MOVIE
@@ -1207,6 +1213,9 @@ const char *joypad_driver_name(unsigned i);
 void joypad_driver_reinit(void *data, const char *joypad_driver_name);
 
 #ifdef HAVE_COMMAND
+/* See command_generation in input_driver_state_t. */
+unsigned input_driver_command_generation(void);
+
 void input_driver_init_command(
       input_driver_state_t *input_st,
       settings_t *settings);
