@@ -719,6 +719,55 @@ static void lane_display_phase(void)
 }
 
 /* ------------------------------------------------------------------ */
+/* Lane: a command runs once while the presenter is repeating          */
+/*   The worker wakes on its own for repeats. A command whose reply    */
+/*   the main thread has not yet consumed must not be run again on    */
+/*   such a wake: for a texture unload that is a double free.          */
+/* ------------------------------------------------------------------ */
+
+static unsigned once_runs;
+static uintptr_t once_command(void *p)
+{
+   (void)p;
+   once_runs++;
+   /* Long enough that the repeat deadline is past when this returns,
+    * so the very next wake is a repeat wake with the reply still in
+    * the mailbox. */
+   retro_sleep(25);
+   return 7;
+}
+
+static void lane_command_runs_once(void)
+{
+   unsigned had = failures;
+   settings_t *settings = config_get_ptr();
+   unsigned i;
+
+   settings->bools.video_threaded_present_repeat = true;
+   set_threaded_via_setting(true);
+   run_frames(10);
+   expect_wrapper(true, "runs-once lane");
+   video_thread_wait_idle();
+
+   once_runs = 0;
+   for (i = 0; i < 20; i++)
+   {
+      uintptr_t r = video_thread_texture_handle(NULL, once_command);
+      CHECK(r == 7, "command %u returned %lu", i, (unsigned long)r);
+      /* Let a few repeats fire between commands. */
+      retro_sleep(40);
+   }
+   video_thread_wait_idle();
+   CHECK(once_runs == 20, "commands ran %u times for 20 sends", once_runs);
+
+   settings->bools.video_threaded_present_repeat = false;
+   set_threaded_via_setting(false);
+
+   if (failures == had)
+      fprintf(stderr, "[pass] command-runs-once lane\n");
+}
+
+/* ------------------------------------------------------------------ */
 
 int main(int argc, char *argv[])
 {
@@ -805,6 +854,7 @@ int main(int argc, char *argv[])
    lane_second_ring_waiter();
    lane_reentrant_from_frame();
    lane_display_phase();
+   lane_command_runs_once();
 
    /* Orderly shutdown: the teardown barriers are part of what is
     * under test. */

@@ -609,6 +609,7 @@ static void video_thread_loop(void *data)
    thread_packet_t pkt;
    unsigned slot;
    bool claimed;
+   bool have_cmd;
    thread_video_t *thr = (thread_video_t*)data;
 
    sthread_setname("ra-video");
@@ -655,13 +656,17 @@ static void video_thread_loop(void *data)
          scond_broadcast(thr->cond_ring);
       }
 
-      /* To avoid race condition where send_cmd is updated
-       * right after the switch is checked. */
-      pkt     = thr->cmd_data;
+      /* Whether there is a command to run is decided here, under the
+       * lock, together with the copy of it. cmd_data still holds the
+       * previous command's reply until the sender consumes it, and
+       * this thread now wakes on its own for repeats: dispatching on
+       * the copy alone would run that command a second time. */
+      have_cmd = thr->send_cmd != CMD_VIDEO_NONE;
+      pkt      = thr->cmd_data;
 
       slock_unlock(thr->lock);
 
-      if (video_thread_handle_packet(thr, &pkt))
+      if (have_cmd && video_thread_handle_packet(thr, &pkt))
          return;
 
       if (claimed)
