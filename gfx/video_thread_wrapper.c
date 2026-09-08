@@ -594,7 +594,8 @@ static void video_thread_schedule_next(thread_video_t *thr)
 
    if (thr->driver_data && thr->poke && thr->poke->get_last_present_time)
       base = thr->poke->get_last_present_time(thr->driver_data);
-   if (base <= 0 || base > now)
+   thr->phase_from_display = base > 0 && base <= now;
+   if (!thr->phase_from_display)
       base = now;
 
    next = base + thr->present_period;
@@ -674,6 +675,7 @@ static void video_thread_loop(void *data)
          struct video_viewport vp;
          uint64_t        presents = 0;
          float       refresh_rate = 0.0f;
+         bool           ret_frame = false;
          bool               alive = false;
          bool               focus = false;
          bool        has_windowed = false;
@@ -733,6 +735,7 @@ static void video_thread_loop(void *data)
 
                slock_unlock(thr->frame.lock);
 
+               ret_frame = ret;
                if (ret)
                {
                   /* The presenter's clock: this frame just went out,
@@ -746,7 +749,6 @@ static void video_thread_loop(void *data)
                      ? (retro_time_t)(1000000.0f * (float)presents / hz) : 0;
                   thr->present_repeat = video_info->retain_output;
                   thr->present_group  = (unsigned)presents;
-                  video_thread_schedule_next(thr);
                }
                else
                   thr->present_repeat = false;
@@ -792,6 +794,10 @@ static void video_thread_loop(void *data)
           * consistently through video_thread_swap_count(). */
          video_state_get_ptr()->swap_count += presents;
          thr->driver_refresh_rate = refresh_rate;
+         /* Under the lock: the phase it records is read by the overlay
+          * from the main thread. */
+         if (ret_frame)
+            video_thread_schedule_next(thr);
          thr->frame.busy    = false;
          scond_broadcast(thr->cond_ring);
          slock_unlock(thr->lock);
@@ -2057,6 +2063,28 @@ bool video_thread_presentable(void)
    ret = thr->presentable;
    slock_unlock(thr->lock);
    return ret;
+}
+
+/* Presenter statistics for the overlay: repeats made this session, and
+ * whether their cadence is phase-locked to the display. Under the lock;
+ * false/0 without the wrapper. Returns whether repeats are armed. */
+bool video_thread_presenter_stats(uint64_t *repeats, bool *display_phase)
+{
+   bool armed;
+   video_driver_state_t *video_st = video_state_get_ptr();
+   thread_video_t       *thr;
+   *repeats       = 0;
+   *display_phase = false;
+   if (!video_st->thread_wrapper_active)
+      return false;
+   if (!(thr = (thread_video_t*)video_st->data) || !thr->thread)
+      return false;
+   slock_lock(thr->lock);
+   armed          = thr->present_repeat;
+   *repeats       = thr->frames_repeated;
+   *display_phase = thr->phase_from_display;
+   slock_unlock(thr->lock);
+   return armed;
 }
 
 uint64_t video_thread_swap_count(void)

@@ -5926,6 +5926,18 @@ void video_driver_frame(const void *data, unsigned width,
                      " Pacing:     %s\n", pbuf);
          }
 
+#ifdef HAVE_THREADS
+         {
+            uint64_t repeats;
+            bool display_phase;
+            if (video_thread_presenter_stats(&repeats, &display_phase))
+               __len += snprintf(video_info.stat_text + __len, sizeof(video_info.stat_text) - __len,
+                     " Repeat:     %llu (%s phase)\n",
+                     (unsigned long long)repeats,
+                     display_phase ? "display" : "timer");
+         }
+#endif
+
          if (video_st->frame_delay_target > 0)
             __len += snprintf(video_info.stat_text + __len, sizeof(video_info.stat_text) - __len,
                   " Frame Delay:%2u.00 ms\n"

@@ -192,6 +192,9 @@ typedef struct thread_video
     * completion so a late display report cannot pile repeats up. */
    retro_time_t next_present;
    uint64_t frames_repeated;
+   /* Whether the last repeat deadline came from a display timestamp
+    * the driver reported (true) or from the clock (false). Stats. */
+   bool phase_from_display;
    /* The wrapped driver's answer to get_refresh_rate, polled on the
     * video thread after each frame and read under 'lock'; 0 when it
     * has none. The presenter paces on it in preference to the setting. */
@@ -382,6 +385,8 @@ uintptr_t video_thread_texture_handle(void *data,
  * said so; true in every other case, including when there is no
  * wrapper, so callers need no threading test of their own. */
 bool video_thread_presentable(void);
+
+bool video_thread_presenter_stats(uint64_t *repeats, bool *display_phase);
 
 /* video_st->swap_count is written by the video thread while the wrapper
  * is installed; this reads it under the wrapper's lock. Without the
