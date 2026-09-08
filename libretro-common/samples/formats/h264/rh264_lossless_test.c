@@ -1,6 +1,6 @@
 /* rh264 against ffmpeg as the oracle, byte-exact: High 4:4:4
- * Predictive (the transform bypass, 4:4:4 chroma), CABAC I_PCM,
- * constrained_intra_pred.
+ * Predictive (the transform bypass, 4:4:4 chroma, 10-bit samples),
+ * CABAC I_PCM, constrained_intra_pred.
  *
  * x264's lossless mode (-qp 0) sets qpprime_y_zero_transform_bypass_flag
  * and codes every macroblock at QP'Y 0: the residual is the sample
@@ -144,21 +144,24 @@ static long compare(const char *mp4, const uint8_t *ref_a, size_t alen,
          int st[3], w[3], hh[3], k;
          for (k = 0; k < 3; k++)
             p[k] = rh264_video_plane(h, k, &st[k], &w[k], &hh[k]);
+         /* above 8 bits the planes hold uint16_t samples and ffmpeg's
+          * raw output is little-endian 16-bit: compare bytes */
+         int bps = (rh264_video_bit_depth(h) > 8) ? 2 : 1;
          for (k = 0; k < 3; k++)
          {
             int y, x, sp = k ? split / 2 : split;
             for (y = 0; y < hh[k]; y++)
             {
                const uint8_t *ref = (y < sp) ? ref_a : ref_b;
-               if (off + (size_t)w[k] > alen)
+               if (off + (size_t)w[k]*bps > alen)
                {
                   bad = -1;
                   goto done;
                }
-               for (x = 0; x < w[k]; x++)
-                  if (p[k][(size_t)y*st[k] + x] != ref[off + x])
+               for (x = 0; x < w[k]*bps; x++)
+                  if (p[k][(size_t)y*st[k]*bps + x] != ref[off + x])
                      bad++;
-               off += (size_t)w[k];
+               off += (size_t)w[k]*bps;
             }
          }
          frames++;
@@ -170,21 +173,22 @@ static long compare(const char *mp4, const uint8_t *ref_a, size_t alen,
       int st[3], w[3], hh[3], k;
       for (k = 0; k < 3; k++)
          p[k] = rh264_video_plane(h, k, &st[k], &w[k], &hh[k]);
+      int bps = (rh264_video_bit_depth(h) > 8) ? 2 : 1;
       for (k = 0; k < 3; k++)
       {
          int y, x, sp = k ? split / 2 : split;
          for (y = 0; y < hh[k]; y++)
          {
             const uint8_t *ref = (y < sp) ? ref_a : ref_b;
-            if (off + (size_t)w[k] > alen)
+            if (off + (size_t)w[k]*bps > alen)
             {
                bad = -1;
                goto done;
             }
-            for (x = 0; x < w[k]; x++)
-               if (p[k][(size_t)y*st[k] + x] != ref[off + x])
+            for (x = 0; x < w[k]*bps; x++)
+               if (p[k][(size_t)y*st[k]*bps + x] != ref[off + x])
                   bad++;
-            off += (size_t)w[k];
+            off += (size_t)w[k]*bps;
          }
       }
       frames++;
@@ -533,6 +537,23 @@ int main(void)
          "-preset medium -x264-params constrained-intra=1");
    oracle_case("cip_cavlc",  "testsrc2=s=176x144:r=15",   8, "yuv420p", "-crf 20",
          "-preset medium -x264-params constrained-intra=1:cabac=0");
+   /* High 10 / High 4:2:2 / High 4:4:4 Predictive at 10 bits: uint16_t
+    * planes, the QpBdOffset domain, scaled deblocking thresholds and
+    * weighted-prediction offsets, ten-bit I_PCM, the 16-bit kernel
+    * instantiation (no SIMD) end to end. */
+   printf("10-bit (uint16_t planes), byte-exact vs ffmpeg:\n");
+   oracle_case("hb_i_cavlc",   "testsrc2=s=96x80:r=10",    3, "yuv420p10le", "-crf 18",
+         "-preset medium -g 1 -x264-params cabac=0:deblock=2,2");
+   oracle_case("hb_ipb_cabac", "testsrc2=s=96x80:r=10",    6, "yuv420p10le", "-crf 22",
+         "-preset medium -x264-params deblock=1,1");
+   oracle_case("hb_wp_bpyr",   "testsrc2=s=96x80:r=10,fade=in:0:6", 8, "yuv420p10le", "-crf 20",
+         "-preset slow -x264-params weightp=2:bframes=3:b-pyramid=normal");
+   oracle_case("hb_422",       "testsrc2=s=96x80:r=10",    6, "yuv422p10le", "-crf 20",
+         "-preset medium");
+   oracle_case("hb_444_ll",    "mandelbrot=s=112x96:r=10", 6, "yuv444p10le", "-qp 0",
+         "-preset medium");
+   oracle_case("hb_pcm",       "nullsrc=s=96x80:r=10,geq=lum='random(1)*1023':cb='random(2)*1023':cr='random(3)*1023'",
+         2, "yuv420p10le", "-qp 0", "-preset medium -g 1");
    printf("High 4:4:4 Predictive, 4:4:4 chroma, byte-exact vs ffmpeg:\n");
    oracle_case("c444_i_cavlc",   "testsrc2=s=96x80:r=10",    4, "yuv444p", "-crf 16",
          "-preset medium -g 1 -x264-params cabac=0:deblock=2,2");
